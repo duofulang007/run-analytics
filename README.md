@@ -3,6 +3,18 @@
 个人自用的跑步数据分析工具。数据来自**小米运动健康 App 的官方隐私中心导出**，读取本地文件，
 不经过任何第三方服务器，不上传云端。
 
+本仓库**独立管理**：可以单独使用（双击 `index.html` 看数据、双击 `导入数据.cmd` 导入），
+也可以被 [apex-console 总控台](https://github.com/duofulang007/apex-console) 作为模块接入启动。
+
+## 提交口诀（双仓库协作）
+
+- 改了**本仓库**的任何文件 → 在本仓库根目录 commit / push。健康数据（`data.js`）已被
+  `.gitignore` 排除，不会误传。
+- 改了总控台的**模块接入层**（`apex-console/backend/modules/runner-lab/`）→ 那属于
+  **总控台仓库**，去那边提交。
+- 自检跟着仓库走：本仓库改完跑 `node tools/check.js --browser`；总控台改完跑它的
+  `node smoke-test.js` 与 pytest。
+
 ## 数据来源与获取方式
 
 1. 浏览器打开 `account.xiaomi.com`，登录小米账号。
