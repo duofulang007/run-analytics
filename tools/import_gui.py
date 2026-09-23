@@ -192,7 +192,7 @@ class ImportWindow:
         self.outcome: dict | None = None
         self.lines: queue.Queue[str] = queue.Queue()
 
-        root.title("跑步数据导入 · runner-lab")
+        root.title("跑步数据导入 · run-analytics")
         root.minsize(560, 460)
         root.configure(bg=BG)
         self._center_on_screen()

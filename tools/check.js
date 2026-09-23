@@ -1,5 +1,5 @@
 /**
- * runner-lab 自检脚本 —— 改完 app.js / index.html / styles.css 之后跑一遍
+ * run-analytics 自检脚本 —— 改完 app.js / index.html / styles.css 之后跑一遍
  *
  *     node tools/check.js            # 逻辑自检（无依赖，纯 Node）
  *     node tools/check.js --browser  # 额外跑真实 Chrome 截图（需要 playwright-core）

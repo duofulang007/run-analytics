@@ -308,7 +308,7 @@ def previous_run_count() -> int:
 
 # ------------------------------------------------------------------ 主流程
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="小米隐私中心导出包 → runner-lab/data.js")
+    parser = argparse.ArgumentParser(description="小米隐私中心导出包 → run-analytics/data.js")
     parser.add_argument("zip", nargs="?", help="导出包路径；省略则自动搜索最新的一个")
     parser.add_argument("--password", help="压缩包密码（一次性；默认读环境变量 MIFITNESS_ZIP_PASSWORD）")
     parser.add_argument("--out", default=str(DEFAULT_OUT), help="输出 data.js 路径")

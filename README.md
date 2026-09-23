@@ -36,7 +36,7 @@
 
 - 改了**本仓库**的任何文件 → 在本仓库根目录 commit / push。健康数据（`data.js`）已被
   `.gitignore` 排除，不会误传。
-- 改了总控台的**模块接入层**（`apex-console/backend/modules/runner-lab/`）→ 那属于
+- 改了总控台的**模块接入层**（`apex-console/backend/modules/Run Analytics/`）→ 那属于
   **总控台仓库**，去那边提交。
 - 自检跟着仓库走：本仓库改完跑 `node tools/check.js --browser`；总控台改完跑它的
   `node smoke-test.js` 与 pytest。
@@ -69,7 +69,7 @@
 ## 目录结构
 
 ```
-runner-lab/
+Run Analytics/
 ├── index.html          页面骨架
 ├── styles.css          样式与设计令牌
 ├── app.js              全部逻辑、图表与建议引擎
@@ -91,7 +91,7 @@ runner-lab/
 
 导入相关的一切都在项目内，**整个目录打包即可带走**，没有项目外的依赖目录。
 （历史上曾有 `D:\RunningData` 充当投放目录与 pid 存放处，2026-09-23 起撤销：
-inbox / latest 收进项目，pid 改放 `%TEMP%\runner-lab\`。）
+inbox / latest 收进项目，pid 改放 `%TEMP%\Run Analytics\`。）
 
 ## 使用
 

@@ -1,6 +1,6 @@
 @echo off
 setlocal
-title runner-lab data import
+title run-analytics data import
 
 set "SCRIPT=%~dp0tools\import_zip.py"
 if not exist "%SCRIPT%" (
