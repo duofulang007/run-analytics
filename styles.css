@@ -1,0 +1,560 @@
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --panel-2: #fbfbfc;
+  --ink: #16181d;
+  --ink-2: #4a4f58;
+  --ink-3: #8b9099;
+  --line: #e6e8ec;
+  --line-2: #d3d6dc;
+
+  --c-dist: #2563eb;
+  --c-pace: #d97706;
+  --c-hr: #dc2626;
+  --c-cad: #0d9488;
+  --c-stride: #7c3aed;
+  --c-td: #dc2626;
+  --c-va: #2563eb;
+  --c-vsr: #0d9488;
+
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --sp-1: 6px;
+  --sp-2: 10px;
+  --sp-3: 16px;
+  --sp-4: 24px;
+  --sp-5: 32px;
+
+  /* 训练日历热力色阶：0 = 休息日，1→5 表示里程递增。
+     heat0 不能直接取 --panel-2（#fbfbfc）—— 卡片本身就是白的，休息日会
+     整个「消失」，连续几周都休息时日历左半边看起来像没有数据（踩过）。
+     这里给一个能看出格子的浅灰，且仍与 heat1 明显区分。 */
+  --heat-0: #eceff3;
+  --heat-1: #dbeafe;
+  --heat-2: #93c5fd;
+  --heat-3: #4f95ef;
+  --heat-4: #2563eb;
+  --heat-5: #1b3f9c;
+  --cal-cell: 22px;
+  --cal-gap: 3px;
+
+  --fs-h1: 18px;
+  --fs-h2: 14px;
+  --fs-b: 13px;
+  --fs-s: 12px;
+  --fs-kpi: 26px;
+
+  --ff: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--ff);
+  font-size: var(--fs-b);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 { margin: 0; font-weight: 600; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  padding: var(--sp-4) var(--sp-5) var(--sp-3);
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand { display: flex; align-items: center; gap: var(--sp-3); }
+
+.logo {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-md);
+  background: #eef2ff;
+  color: var(--c-dist);
+}
+.logo svg { width: 22px; height: 22px; }
+
+.brand h1 { font-size: var(--fs-h1); letter-spacing: -0.2px; }
+.brand .sub { margin: 2px 0 0; font-size: var(--fs-s); color: var(--ink-3); }
+
+.filters { display: flex; align-items: center; gap: var(--sp-2); }
+.flabel { font-size: var(--fs-s); color: var(--ink-3); }
+
+.seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.seg button {
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--fs-s);
+  padding: 5px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.seg button:hover { background: #eef0f4; }
+.seg button.on { background: var(--ink); color: #fff; }
+
+.tabs {
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-5) 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+.tabs button {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-b);
+  color: var(--ink-2);
+  padding: 9px 16px;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tabs button:hover { color: var(--ink); }
+.tabs button.on { color: var(--ink); border-bottom-color: var(--c-dist); font-weight: 600; }
+
+main { padding: var(--sp-4) var(--sp-5) var(--sp-5); }
+
+.panel { display: none; }
+.panel.on { display: block; }
+
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+/* 日视图有 9 张卡：用 150px 的最小宽会正好排成 8 列，最后一张落单换行。
+   最小宽降到 120px 后 auto-fit 能排出 9 列以上（空轨道会塌缩、剩下的一起拉伸），
+   9 张就刚好一行。 */
+.kpis.day { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+
+.kpi {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+}
+.kpi .k { font-size: var(--fs-s); color: var(--ink-3); }
+.kpi .v { font-size: var(--fs-kpi); font-weight: 600; letter-spacing: -0.5px; margin-top: 2px; }
+.kpi .v small { font-size: 13px; font-weight: 500; color: var(--ink-3); margin-left: 3px; letter-spacing: 0; }
+.kpi .d { font-size: var(--fs-s); color: var(--ink-3); margin-top: 2px; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--sp-3);
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--sp-3) var(--sp-3) var(--sp-2);
+}
+.card.wide { grid-column: 1 / -1; }
+.grid.two { grid-template-columns: repeat(2, 1fr); }
+.grid.three { grid-template-columns: repeat(3, 1fr); }
+
+/* ---- 对比页子页签：内容太多硬塞一页会又挤又糊，拆成两个子页各自一屏 ---- */
+.subtabs { margin-bottom: var(--sp-3); }
+.sub { display: none; }
+.sub.on { display: block; }
+
+/* 页内分区标题：对比页要分成「月度对比」与「跨年与赛季对比」两段 */
+.blockhd {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin: var(--sp-4) 0 var(--sp-3);
+  padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--line);
+}
+.blockhd:first-child { margin-top: 0; }
+.blockhd h2 { font-size: var(--fs-h1); }
+.blockhd label { font-size: var(--fs-s); color: var(--ink-3); margin-left: auto; }
+.blockhd select {
+  font: inherit;
+  font-size: var(--fs-b);
+  padding: 5px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-2);
+  background: var(--panel);
+  color: var(--ink);
+}
+.blockhd .hint { font-size: var(--fs-s); color: var(--ink-3); }
+
+.chd { margin-bottom: var(--sp-2); }
+.chd h2 { font-size: var(--fs-h2); }
+.chd p { margin: 2px 0 0; font-size: var(--fs-s); color: var(--ink-3); }
+
+.cbox { position: relative; width: 100%; }
+.h260 { height: 260px; }
+.h300 { height: 300px; }
+.h320 { height: 320px; }
+/* 对比页专用：一屏塞下「结论 + 图 + 表」，图高向布局让位 */
+.h160 { height: 160px; }
+.h200 { height: 200px; }
+
+.notes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+.note {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--c-dist);
+  border-radius: var(--r-sm);
+  padding: var(--sp-3);
+}
+.note.good { border-left-color: var(--c-cad); }
+.note.warn { border-left-color: var(--c-pace); }
+.note.bad { border-left-color: var(--c-hr); }
+.note h3 { font-size: var(--fs-b); margin-bottom: 4px; }
+.note p { margin: 0; font-size: var(--fs-s); color: var(--ink-2); }
+
+.pickbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-3);
+}
+.pickbar label { font-size: var(--fs-s); color: var(--ink-3); }
+.pickbar select {
+  font: inherit;
+  font-size: var(--fs-b);
+  padding: 7px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-2);
+  background: var(--panel);
+  color: var(--ink);
+  min-width: 280px;
+}
+.picknav { display: flex; gap: var(--sp-1); margin-left: auto; }
+.picknav button {
+  font: inherit;
+  font-size: var(--fs-s);
+  padding: 6px 14px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-2);
+  background: var(--panel);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.picknav button:hover { background: var(--panel-2); color: var(--ink); }
+
+.tablebar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+.tablebar input {
+  font: inherit;
+  font-size: var(--fs-b);
+  padding: 7px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-2);
+  background: var(--panel);
+  color: var(--ink);
+  min-width: 240px;
+}
+.hint { font-size: var(--fs-s); color: var(--ink-3); }
+
+.tablewrap {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  overflow: auto;
+  margin-top: var(--sp-3);
+}
+/* 对比页的表收进固定高度内部滚动：页面主滚动条消失，表头 sticky 仍然可用 */
+.tablewrap.tight { max-height: 128px; }
+.tablewrap.tight2 { max-height: 300px; }
+
+/* 子页内部间距收紧：目标是一屏读完，块间距从 24 降到 12 */
+.sub .blockhd { margin-top: 0; margin-bottom: 8px; }
+.sub .notes { margin-bottom: 12px; }
+.sub .grid { margin-bottom: 0; }
+.sub .note { padding: 8px 14px; }
+.sub .note p { line-height: 1.45; }
+.subtabs { margin-bottom: 6px; }
+
+.tbl { width: 100%; border-collapse: collapse; font-size: var(--fs-s); }
+.tbl th, .tbl td { padding: 8px 12px; text-align: right; white-space: nowrap; }
+.tbl th:first-child, .tbl td:first-child { text-align: left; }
+.tbl thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel-2);
+  color: var(--ink-2);
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+  z-index: 1;
+}
+.tbl.sortable thead th { cursor: pointer; user-select: none; }
+.tbl.sortable thead th:hover { color: var(--ink); }
+.tbl.sortable thead th::after { content: ""; display: inline-block; width: 10px; }
+.tbl.sortable thead th.asc::after { content: "  ↑"; color: var(--c-dist); }
+.tbl.sortable thead th.desc::after { content: "  ↓"; color: var(--c-dist); }
+.tbl tbody tr { border-bottom: 1px solid var(--line); }
+.tbl tbody tr:last-child { border-bottom: 0; }
+.tbl tbody tr:hover { background: var(--panel-2); }
+.tbl td.num { font-variant-numeric: tabular-nums; }
+
+/* 总览顶部的今日建议条：一句话结论 + 可点进日视图 */
+.advbar {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--c-dist);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.advbar:hover { background: var(--panel-2); }
+.advbar.rest { border-left-color: var(--c-cad); }
+.advbar.easy { border-left-color: var(--c-dist); }
+.advbar.warn { border-left-color: var(--c-pace); }
+.advbar .tag {
+  flex: none;
+  padding: 1px 9px;
+  border-radius: 999px;
+  font-size: var(--fs-s);
+  font-weight: 600;
+  background: #eef2ff;
+  color: var(--c-dist);
+}
+.advbar.rest .tag { background: #e8f6f2; color: var(--c-cad); }
+.advbar.warn .tag { background: #fdf3e4; color: var(--c-pace); }
+.advbar strong { font-weight: 600; }
+.advbar p { margin: 2px 0 0; font-size: var(--fs-s); color: var(--ink-2); }
+.advbar .more { margin-left: auto; flex: none; font-size: var(--fs-s); color: var(--ink-3); }
+
+/* 训练日历：列 = 周，行 = 周一到周日。
+   --cal-cell 由 JS 按可用宽度算出来写在 .calflex 上（见 sizeCalendar），
+   这里只留一个兜底值，保证脚本没跑到时也是方的、能看。 */
+.calwrap { overflow-x: auto; padding-bottom: var(--sp-1); }
+.calflex {
+  display: flex;
+  gap: var(--sp-1);
+  justify-content: safe center;
+  min-width: max-content;
+  --cal-cell: 22px;
+}
+.caldow {
+  display: grid;
+  grid-template-rows: repeat(7, var(--cal-cell));
+  gap: var(--cal-gap);
+  font-size: var(--fs-s);
+  line-height: var(--cal-cell);
+  color: var(--ink-3);
+  text-align: right;
+}
+.cal {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, var(--cal-cell));
+  grid-auto-columns: var(--cal-cell);
+  gap: var(--cal-gap);
+}
+.cal button {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  /* 底色由 .heat0–.heat5 提供。这里**不能**写 background：
+     .cal button 的优先级 (0,1,1) 会压过 .heat1 的 (0,1,0)，
+     结果是所有格子都退回同一个颜色（踩过一次，整片日历全是空白色）。 */
+}
+/* 有跑的日子不需要描边，让色阶自己说话 */
+.cal button.heat1, .cal button.heat2, .cal button.heat3,
+.cal button.heat4, .cal button.heat5 { border-color: transparent; }
+.cal button:hover { border-color: var(--ink-3); }
+.cal button.blank { visibility: hidden; cursor: default; }
+.cal button.today { outline: 2px solid var(--ink); outline-offset: 1px; }
+.cal button.sel { box-shadow: inset 0 0 0 2px var(--c-pace); }
+
+.heat0 { background: var(--heat-0); }
+.heat1 { background: var(--heat-1); }
+.heat2 { background: var(--heat-2); }
+.heat3 { background: var(--heat-3); }
+.heat4 { background: var(--heat-4); }
+.heat5 { background: var(--heat-5); }
+
+.callegend {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-top: var(--sp-3);
+  font-size: var(--fs-s);
+  color: var(--ink-3);
+}
+.callegend i {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+/* 对比页：基准月 + 本期两个下拉，整体靠右 */
+.cmp-pick {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+.cmp-pick label { margin-left: 0; }
+.cmp-pick label + select { margin-right: var(--sp-2); }
+
+/* ---- 今日建议大卡：状态标签 + 一句结论 + 关键数字 + 一句原因 ---- */
+.advcard {
+  padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-3);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--c-dist);
+  border-radius: var(--r-md);
+}
+.advcard.rest { border-left-color: var(--c-cad); }
+.advcard.warn { border-left-color: var(--c-pace); }
+.vtag {
+  display: inline-block;
+  padding: 2px 10px;
+  margin-bottom: var(--sp-1);
+  border-radius: 999px;
+  font-size: var(--fs-s);
+  font-weight: 600;
+  background: #eef2ff;
+  color: var(--c-dist);
+}
+.advcard.rest .vtag { background: #e8f6f2; color: var(--c-cad); }
+.advcard.warn .vtag { background: #fdf3e4; color: var(--c-pace); }
+.advcard .head { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; line-height: 1.35; }
+.advcard .chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-2); }
+.chip {
+  padding: 3px 11px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-size: var(--fs-s);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+.advcard .why { margin: var(--sp-2) 0 0; font-size: var(--fs-s); color: var(--ink-3); }
+
+/* ---- 依据列表：一行一条，比长段落好扫读 ---- */
+.facts {
+  padding: var(--sp-1) var(--sp-3);
+  margin-bottom: var(--sp-4);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.fact {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-s);
+}
+.fact:last-child { border-bottom: 0; }
+.fact .fk { color: var(--ink-3); }
+.fact .fv { color: var(--ink); font-variant-numeric: tabular-nums; }
+.fact .fd { color: var(--ink-3); }
+.fb {
+  padding: 1px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--panel-2);
+  color: var(--ink-2);
+}
+.fb.good { background: #e8f6f2; color: var(--c-cad); }
+.fb.warn { background: #fdf3e4; color: var(--c-pace); }
+.fb.bad { background: #fdeced; color: var(--c-hr); }
+
+/* ---- 负荷状态三块 ---- */
+.stat3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+.stat {
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.stat .sk { font-size: var(--fs-s); color: var(--ink-3); }
+.stat .sv {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  font-variant-numeric: tabular-nums;
+}
+.stat .sd { font-size: var(--fs-s); color: var(--ink-3); }
+.stat.good .sv { color: var(--c-cad); }
+.stat.warn .sv { color: var(--c-pace); }
+.stat.bad .sv { color: var(--c-hr); }
+
+/* ---- 跑姿体检表 ---- */
+.gaitcheck th, .gaitcheck td { padding: 10px 12px; text-align: left; white-space: normal; }
+.gaitcheck td:first-child { font-weight: 600; white-space: nowrap; }
+.gaitcheck .gv { font-size: 15px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.gaitcheck .gb { font-size: var(--fs-s); color: var(--ink-3); }
+.gaitcheck .gt { font-size: var(--fs-s); color: var(--ink-2); }
+.badge {
+  display: inline-block;
+  padding: 1px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.badge.good { background: #e8f6f2; color: var(--c-cad); }
+.badge.warn { background: #fdf3e4; color: var(--c-pace); }
+.badge.bad { background: #fdeced; color: var(--c-hr); }
+
+@media (max-width: 900px) {
+  .topbar, .tabs, main { padding-left: var(--sp-3); padding-right: var(--sp-3); }
+  .grid, .grid.two, .grid.three { grid-template-columns: 1fr; }
+  .blockhd label { margin-left: 0; }
+  .cmp-pick { margin-left: 0; flex-wrap: wrap; }
+  .fact { grid-template-columns: 84px minmax(0, 1fr); }
+  .fact .fb { grid-column: 2; justify-self: start; }
+  .advcard .head { font-size: 19px; }
+}

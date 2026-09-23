@@ -1,0 +1,13 @@
+# runner-lab 私有/生成物：健康数据与运行产物不进本仓库
+# data.js 可通过导入一次小米导出包重建（双击「导入数据.cmd」）
+data.js
+data.prev.js
+
+# 导入投放目录：里面是待导入 / 已导入的小米 zip 原始包
+inbox/*
+!inbox/README.txt
+latest/
+
+# Python 缓存
+__pycache__/
+*.pyc

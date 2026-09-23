@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>跑步数据仪表盘</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 3l-3 7h5l-3 7"/><path d="M3 20h18"/>
+      </svg>
+    </span>
+    <div>
+      <h1>跑步数据仪表盘</h1>
+      <p class="sub">数据源：小米运动健康官方导出 · 仅户外跑步 · <span id="genAt"></span></p>
+    </div>
+  </div>
+  <div class="filters">
+    <span class="flabel">时间范围</span>
+    <div class="seg" id="yearSeg">
+      <button type="button" data-year="2026" class="on">2026</button>
+      <button type="button" data-year="2025">2025</button>
+      <button type="button" data-year="all">全部</button>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button type="button" data-tab="overview" class="on">总览</button>
+  <button type="button" data-tab="daily">日视图</button>
+  <button type="button" data-tab="gait">跑姿分析</button>
+  <button type="button" data-tab="single">单次复盘</button>
+  <button type="button" data-tab="compare">对比分析</button>
+  <button type="button" data-tab="table">全部记录</button>
+</nav>
+
+<main>
+
+  <section class="panel on" id="panel-overview">
+    <div class="advbar" id="ovAdvice"></div>
+    <div class="kpis" id="kpis"></div>
+    <div class="grid">
+      <div class="card wide">
+        <div class="chd"><h2>每次跑步：距离与平均配速</h2><p>柱状为距离，曲线为平均配速（纵轴已反向，越靠上越快）</p></div>
+        <div class="cbox h300"><canvas id="cDistPace"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="chd"><h2>月度跑量</h2><p>柱状为当月总里程</p></div>
+        <div class="cbox h260"><canvas id="cMonth"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="chd"><h2>心率区间时长</h2><p>全部选中场次的五档分布</p></div>
+        <div class="cbox h260"><canvas id="cZones"></canvas></div>
+      </div>
+      <div class="card wide">
+        <div class="chd"><h2>训练负荷与状态</h2><p id="cLoadSub">CTL 体能（涨得慢）· ATL 疲劳（来得快、去得也快）· TSB 状态 = CTL − ATL</p></div>
+        <div class="stat3" id="loadStat"></div>
+        <div class="cbox h300"><canvas id="cLoad"></canvas></div>
+        <p class="hint" id="loadHint"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-daily">
+    <div id="advCard"></div>
+    <div class="facts" id="advFacts"></div>
+    <div class="card">
+      <div class="chd"><h2>训练日历</h2><p id="calSub"></p></div>
+      <div class="calwrap">
+        <div class="calflex">
+          <div class="caldow"><span>一</span><span></span><span>三</span><span></span><span>五</span><span></span><span>日</span></div>
+          <div class="cal" id="calGrid"></div>
+        </div>
+      </div>
+      <div class="callegend" id="calLegend"></div>
+    </div>
+    <div class="blockhd">
+      <h2 id="dayTitle"></h2>
+      <span class="hint" id="dayHint"></span>
+    </div>
+    <div class="kpis day" id="dayKpis"></div>
+    <div class="facts" id="dayNotes"></div>
+  </section>
+
+  <section class="panel" id="panel-gait">
+    <div class="card wide">
+      <div class="chd"><h2>跑姿体检</h2><p id="gaitCheckSub"></p></div>
+      <table class="tbl gaitcheck" id="gaitCheck"></table>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <div class="chd"><h2>触地时间</h2><p>越低越好，浅色带为当场最小至最大</p></div>
+        <div class="cbox h260"><canvas id="cTd"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="chd"><h2>垂直振幅</h2><p>越低越省力，浅色带为当场最小至最大</p></div>
+        <div class="cbox h260"><canvas id="cVa"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="chd"><h2>垂直步幅比</h2><p>垂直振幅占步幅的比例，越低越好</p></div>
+        <div class="cbox h260"><canvas id="cVsr"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="chd"><h2>步频与步幅</h2><p>双轴对照</p></div>
+        <div class="cbox h260"><canvas id="cCadStride"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="chd"><h2>配速与触地时间</h2><p>看跑得越慢是否触地越久</p></div>
+        <div class="cbox h260"><canvas id="cScPaceTd"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="chd"><h2>步频与垂直振幅</h2><p>看步频提高是否压低弹跳</p></div>
+        <div class="cbox h260"><canvas id="cScCadVa"></canvas></div>
+      </div>
+    </div>
+    <div class="facts" id="gaitNotes"></div>
+  </section>
+
+  <section class="panel" id="panel-single">
+    <div class="pickbar">
+      <label for="runPick">选择场次</label>
+      <select id="runPick"></select>
+      <div class="picknav">
+        <button type="button" id="btnPrev">上一场</button>
+        <button type="button" id="btnNext">下一场</button>
+      </div>
+    </div>
+    <div class="kpis" id="kpisSingle"></div>
+    <div class="facts" id="singleNotes"></div>
+    <div class="grid">
+      <div class="card wide">
+        <div class="chd"><h2>逐分钟曲线</h2><p>左轴配速（反向），右轴心率与步频</p></div>
+        <div class="cbox h320"><canvas id="cSingle"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="chd"><h2>该场配速分布</h2><p>每分钟配速直方图</p></div>
+        <div class="cbox h260"><canvas id="cHist"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="chd"><h2>半程漂移</h2><p>前半程与后半程对比</p></div>
+        <div class="cbox h260"><canvas id="cDrift"></canvas></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-compare">
+    <!-- 子页签：对比内容太多，硬塞一页会又挤又糊；拆成两个子页各自一屏，
+         每屏不滚动、图表足够大。切换逻辑见 app.js 的 showCmpSub。 -->
+    <div class="seg subtabs" id="cmpSubTabs">
+      <button type="button" data-sub="month" class="on">月度对比</button>
+      <button type="button" data-sub="season">跨年与赛季</button>
+      <button type="button" data-sub="detail">明细表</button>
+    </div>
+
+    <div class="sub on" id="sub-month">
+      <div class="blockhd">
+        <h2>月度对比</h2>
+        <span class="hint" id="mCmpHint"></span>
+        <div class="cmp-pick">
+          <label for="cmpBase">基准月</label>
+          <select id="cmpBase"></select>
+          <label for="cmpMonth">本期</label>
+          <select id="cmpMonth"></select>
+        </div>
+      </div>
+      <div class="notes" id="mCmpNotes"></div>
+      <div class="grid three">
+        <div class="card">
+          <div class="chd"><h2>配速与心率关系</h2><p id="mScSub">同样配速下心率更低，代表有氧能力更强</p></div>
+          <div class="cbox h200"><canvas id="cMonthSc"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="chd"><h2>同距离档位心率</h2><p id="mBandSub">把跑量锁在同一档位后再比心率</p></div>
+          <div class="cbox h200"><canvas id="cMonthBand"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="chd"><h2>本期与基准月关键指标</h2><p id="mKpiSub">按月份平均值对比</p></div>
+          <div class="cbox h200"><canvas id="cMonthKpi"></canvas></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sub" id="sub-season">
+      <div class="blockhd"><h2>跨年与赛季对比</h2><span class="hint">2025 全年 vs 2026 全年，以及 2026 赛季内同距离对比</span></div>
+      <div class="notes" id="cmpNotes"></div>
+      <div class="grid two">
+        <div class="card">
+          <div class="chd"><h2>2025 与 2026 关键指标</h2><p>跑量差距大，均值只作参考</p></div>
+          <div class="cbox h160"><canvas id="cYearCmp"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="chd"><h2>2026 赛季内对比</h2><p>7 月及以前 vs 8 月以后，已控制跑量</p></div>
+          <div class="cbox h160"><canvas id="cSeasonCmp"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="chd"><h2>同距离档位对比</h2><p>相近里程场次的平均表现</p></div>
+          <div class="cbox h160"><canvas id="cBucket"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="chd"><h2>周训练量</h2><p>柱状为周里程，曲线为周平均配速</p></div>
+          <div class="cbox h160"><canvas id="cWeek"></canvas></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sub" id="sub-detail">
+      <div class="blockhd"><h2>明细表</h2><span class="hint">两张表都是完整数据；图表子页里的结论以它们为依据</span></div>
+      <div class="grid two">
+        <div class="card">
+          <div class="chd"><h2>月度对比 · 逐指标</h2><p id="mCmpHint2"></p></div>
+          <div class="tablewrap" style="max-height:520px">
+            <table class="tbl" id="mCmpTbl"></table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="chd"><h2>跨年对比 · 逐指标</h2><p>2025 全年 vs 2026 全年</p></div>
+          <div class="tablewrap" style="max-height:520px">
+            <table class="tbl" id="cmpTbl"></table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-table">
+    <div class="tablebar">
+      <input type="text" id="search" placeholder="按日期筛选，例如 2026-09">
+      <span class="hint" id="rowHint"></span>
+    </div>
+    <div class="tablewrap">
+      <table class="tbl sortable" id="runTbl"></table>
+    </div>
+  </section>
+
+</main>
+
+<script src="vendor/chart.umd.min.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
