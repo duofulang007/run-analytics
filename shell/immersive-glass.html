@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>跑步数据 · 沉浸看板</title>
+<!--
+  ============================================================================
+  沉浸玻璃外壳（零侵入包装层）
+  ----------------------------------------------------------------------------
+  这个文件不 import、不 include、不复制看板的任何代码；看板只是被塞进下面的
+  iframe。所以看板的 index.html / styles.css / app.js / data.js 一个字节都不用改，
+  以后你改看板的业务逻辑、图表、布局，这里完全不受影响（反之亦然）。
+
+  交互速查（都写在外壳里，看板不知道）：
+    Ctrl + 滚轮    以光标为锚点缩放（看细节）
+    按住 Ctrl 拖动  平移画布
+    0              复位到整幅适配
+    双击空白 / F    全屏（全屏后 Esc 退出）
+    R              重载看板（导入新数据后按一下就是最新）
+    空格/?         再看一次提示
+
+  直接双击打开 = 跨源降级模式；双击项目根目录「沉浸看板.cmd」= 全功能模式。
+  ============================================================================
+-->
+<link rel="stylesheet" href="immersive-glass.css">
+</head>
+<body>
+
+<!-- 背景雾光：低饱和、超软边，供给玻璃的 backdrop-filter 去模糊。
+     默认**静止** —— 玻璃后面持续动 = 每帧重算模糊，是这类页面卡顿的头号来源；
+     想看缓慢漂移就加 ?motion=on。 -->
+<div class="aurora" aria-hidden="true">
+  <i class="blob b1"></i>
+  <i class="blob b2"></i>
+  <i class="blob b3"></i>
+  <i class="blob b4"></i>
+</div>
+<div class="vignette" aria-hidden="true"></div>
+
+<!-- 舞台：撑满视口、把玻璃画布居中；双击它的空白处 = 进/出全屏 -->
+<div class="stage" id="stage">
+
+  <div class="glass" id="glass">
+
+    <!-- 裁剪层 = 玻璃内边距之内的整块画布区域（圆角 + 溢出裁掉） -->
+    <div class="clip" id="clip">
+      <!-- 缩放层：transform: translate(dx,dy) scale(k)，原点 top left。
+           宽高恒等于设计稿尺寸 —— 帧内布局尺寸恒定，看板的图表永远不需要 resize。 -->
+      <div class="scaler" id="scaler">
+        <!-- 被包装的看板。src 是相对路径，永远指向仓库根目录的 index.html。
+             跨源模式下它比设计稿宽出 scrollbarGutter，多出来那一条被 scaler 裁掉。 -->
+        <iframe id="frame" class="frame" src="../index.html"
+                title="跑步数据仪表盘" allow="fullscreen"></iframe>
+      </div>
+    </div>
+
+    <!-- 接管层：只在按住 Ctrl 时出现。
+         iframe 是独立文档，滚轮/拖拽在它里面就被吃掉了，外壳收不到 ——
+         铺这一层把指针事件收回来，Ctrl+滚轮才能以光标为锚点缩放。
+         不吃事件时它照常是 pointer-events:none，不影响看板交互。 -->
+    <div class="pan-layer" id="panLayer" aria-hidden="true"></div>
+
+    <!-- 只读 HUD：不吃事件，鼠标静止 2.6s 自动隐去；字号跟着画布缩放走 -->
+    <div class="hud" id="hud">
+      <div class="hud-left">
+        <svg class="hud-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M13 3l-3 7h5l-3 7"/><path d="M3 20h18"/>
+        </svg>
+        <span class="hud-title">跑步数据 · 历史看板</span>
+        <span class="hud-chip" id="hudMode">只读</span>
+      </div>
+      <div class="hud-right">
+        <span class="hud-zoom" id="hudZoom">100%</span>
+        <button class="hud-btn fit" id="btnFit" type="button" aria-label="复位到适配" title="复位到整幅适配（0）">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/>
+            <path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/>
+          </svg>
+        </button>
+        <button class="hud-btn" id="btnFs" type="button" aria-label="切换全屏" title="切换全屏（F）">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 9V4h5"/><path d="M20 15v5h-5"/>
+            <path d="M15 4h5v5"/><path d="M9 20H4v-5"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="hint-fade" id="hintFade">按住 Ctrl 滚轮缩放 / 拖动平移 · 0 复位 · 双击空白全屏 · R 刷新数据</div>
+
+    <div class="boot" id="boot">正在装载看板…</div>
+  </div>
+</div>
+
+<script src="immersive-glass.js"></script>
+</body>
+</html>

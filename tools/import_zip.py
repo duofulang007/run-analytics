@@ -8,7 +8,11 @@
      * hlth_center_fitness_data.csv   逐分钟心率 / 步数（未压缩 199 MB，必须流式）
    其余 32 个成员（user_member_profile / user_device_setting / user_fitness_data_records
    / MiFitness_data_copy_guide.pdf 等）**一次都不会被打开**，因此不会产生任何副本。
-3. 幂等：同一份包跑一次和跑十次结果一致；场次数变少时拒绝写入（防「导出漏了几天」把历史吞掉）。
+3. 幂等：同一份包跑一次和跑十次结果一致。
+4. **新旧只认「哪个更新」，不认场数多少**（2026-09-24 多弗朗要求）：本地有多个包时按
+   文件名里的导出日期挑最新的那个；写入前也只比「最新一场的日期」——比看板旧才拒绝
+   （防重下一份旧包把看板倒推回去）。场数只用来打一行提醒，不再当写不写的依据：
+   场数少不代表包旧（导出侧的坏时间戳会被年份规则滤掉，实测出现过）。
 
 用法
     python tools/import_zip.py                    # 自动找最新的导出包
@@ -18,13 +22,15 @@
     python tools/import_zip.py --no-prompt         # 无人值守：缺密码就直接报错，绝不挂住
 
 返回码
-    0 成功｜2 找不到包｜3 没密码｜4 密码错｜5 AES 包｜6 场次数倒退（拒绝写入）｜7 包里没有跑步数据成员
+    0 成功｜2 找不到包｜3 没密码｜4 密码错｜5 AES 包｜6 包比看板旧（拒绝写入）｜7 包里没有跑步数据成员
 
 密码来源（按顺序）
     --password  >  环境变量 MIFITNESS_ZIP_PASSWORD  >  交互输入（需要 TTY）
 
     **刻意不落盘、不读密码文件**：小米的导出密码会变，存下来只会变成"上次的密码"。
-    正常用法是在导入窗口（tools/import_gui.py）里每次现填。
+    正常路径下没人手输：tools/fetch_from_mail.py 从邮件里取到密码后，经环境变量传给
+    子进程，用完即弃。导入窗口（tools/import_gui.py）里**没有**密码框 —— 2026-09-24
+    起只走邮箱这一条路，手动导入只剩命令行这一种方式。
 """
 from __future__ import annotations
 
@@ -37,6 +43,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import zipfile
 
@@ -44,14 +51,24 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = PROJECT_DIR / "data.js"
 PREV_OUT = PROJECT_DIR / "data.prev.js"
 
-# 搜索导出包的位置（按顺序，找不到就报错并提示拖拽）。
+# 搜索导出包的位置（按顺序；一个都找不到就报错，并告诉他怎么手动指定）。
 # inbox / latest 收在项目内（2026-09-23 起）：项目打包时自动带走，不再依赖 D:\RunningData。
+# D:\网页下载 是浏览器实际的下载落点（2026-09-24 实测确认：那里的包一直没被找到，
+# 因为老配置只认它下面的「新建文件夹」，而那个子目录并不存在）。
 SEARCH_DIRS = (
     PROJECT_DIR / "inbox",
     PROJECT_DIR / "latest",
-    Path(r"D:\网页下载\新建文件夹"),
-    Path.home() / "Downloads",
 )
+# 只找项目内的目录（2026-09-24 收敛，多弗朗要求）。
+# 以前还包含 D:\网页下载 与系统下载目录，代价是：清掉状态后 baseline 归零，
+# 那里任何一个刚下载的 zip 都会被当成「最新的导出包」（实测 archify.zip 就被选中过）。
+# 自动下载的落点本来就是本项目 inbox，没必要再去外面翻。
+# 手动导入不受影响：命令行传的是显式路径（python tools/import_zip.py <zip>），不走这套搜索。
+
+# ==== 小米导出包的名字口径（唯一权威）====
+# 清理旧包、清理下载产物都按这一条判断；**绝不按「旧的 zip」这种宽口径删** ——
+# `D:\网页下载` 是他的下载目录，里面还有别的文件。
+PACKAGE_NAME_RE = re.compile(r"MiFitness.*\.zip$", re.I)
 
 # ==== 白名单：只允许读这两个成员，其余一律不打开 ====
 SPORT_SUFFIX = "hlth_center_sport_record.csv"
@@ -88,22 +105,45 @@ def num(value, default=0):
 
 
 # ------------------------------------------------------------------ 找包 / 开包
+# 小米的导出包以**导出日期**开头：20260923_2848269717_MiFitness_c3_data_copy.zip
+# 这个日期是「内容的新旧」；mtime 只是「什么时候下到本地」。
+STAMP_RE = re.compile(r"^(\d{8})")
+
+
+def name_stamp(name: str) -> int:
+    """文件名里的导出日期（YYYYMMDD）；没有就是 0。"""
+    match = STAMP_RE.match(name or "")
+    return int(match.group(1)) if match else 0
+
+
+def package_stamp(path: Path) -> tuple[int, float]:
+    """包的「新旧」排序键：先看文件名里的导出日期，再兜底看 mtime。
+
+    为什么不能只看 mtime：重新下一份**旧**包会让 mtime 变新，于是被当成最新
+    （实测过：改了搜索目录后，一个刚下载的无关 zip 就被选中过）。日期是内容自带的，
+    不受下载时间影响。
+    """
+    return (name_stamp(path.name), path.stat().st_mtime)
+
+
 def find_latest_zip() -> Path | None:
-    best: Path | None = None
-    best_mtime = -1.0
+    """搜索目录里**内容最新**的导出包 —— 不是「最近下载的那个」。"""
+    candidates = []
     for folder in SEARCH_DIRS:
         if not folder.is_dir():
             continue
         for item in folder.glob("*.zip"):
+            # 口径与以前保持一致（MiFitness / MiWear 都算），这次只改「挑哪个」不改「挑不挑」。
             if "MiFitness" not in item.name and "MiWear" not in item.name:
                 continue
             try:
-                mtime = item.stat().st_mtime
+                package_stamp(item)
             except OSError:
                 continue
-            if mtime > best_mtime:
-                best, best_mtime = item, mtime
-    return best
+            candidates.append(item)
+    if not candidates:
+        return None
+    return max(candidates, key=package_stamp)
 
 
 def match_members(names: list[str]) -> dict[str, str]:
@@ -295,15 +335,20 @@ def build_months(runs: list[dict]) -> list[dict]:
     return list(months.values())
 
 
-def previous_run_count() -> int:
+def previous_scope() -> tuple[int, str]:
+    """现有 data.js 的（场次数，最新一场的日期）。
+
+    要的是「最新到哪一天」—— 判断新包该不该写进看板，比的就是这一个值。
+    """
     if not DEFAULT_OUT.is_file():
-        return 0
+        return 0, ""
     try:
         text = DEFAULT_OUT.read_text(encoding="utf-8")
         payload = json.loads(text.split("=", 1)[1].rstrip().rstrip(";"))
-        return len(payload.get("runs") or [])
+        runs = payload.get("runs") or []
+        return len(runs), max((r.get("date") or "" for r in runs), default="")
     except Exception:
-        return 0
+        return 0, ""
 
 
 # ------------------------------------------------------------------ 主流程
@@ -320,7 +365,7 @@ def main(argv=None) -> int:
 
     zip_path = Path(args.zip) if args.zip else find_latest_zip()
     if zip_path is None or not zip_path.is_file():
-        say("找不到导出包。请把 zip 拖到本脚本（或 import-running-data.cmd）上，")
+        say("找不到导出包。把包路径直接传进来（python tools/import_zip.py <zip>），")
         say("或者把包放进以下任一目录后重跑：")
         for folder in SEARCH_DIRS:
             say("  " + str(folder))
@@ -337,19 +382,17 @@ def main(argv=None) -> int:
                      if any(h in n for h in SENSITIVE_HINTS)
                      and n.rsplit("/", 1)[-1] not in picked.values()]
 
+        # 隐私交代压成 3 行：以前把 6 个「跳过」的敏感成员名逐个列出来，每次导入都是
+        # 同样那 11 行，纯噪声（实测占导入日志 17 行里的 11 行）。只读的那两个要留全名，
+        # 那是「只读白名单」这个承诺的证据；不读的给个总数就够。
         say("")
-        say("压缩包内共 %d 个成员，本次只会解密并读取 %d 个：" % (len(names), len(picked)))
+        say("包内 %d 个成员，只解密读取这 %d 个（其余 %d 个一律不打开，含 %d 个敏感成员）："
+            % (len(names), len(picked), len(names) - len(picked), len(sensitive)))
         for suffix, name in picked.items():
             info = zf.getinfo(name)
-            say("  [读取] %-52s %9.1f KB（未压缩）" % (name[-52:], info.file_size / 1024.0))
-        say("  其余 %d 个成员一个都不会被打开，其中包括：" % (len(names) - len(picked)))
-        shown = 0
-        for n in sensitive:
-            if shown >= 6:
-                say("         …（共 %d 个敏感成员，全部跳过）" % len(sensitive))
-                break
-            say("  [跳过] %s" % n.rsplit("/", 1)[-1])
-            shown += 1
+            # 只报白名单后缀，不报完整成员名 —— 完整名前面那截（uid + 日期 + MiFitness_）
+            # 每个成员都一样，截断显示还会切出半截 "…_2848…"，反而看不懂。
+            say("  [读取] %-42s %9.1f KB 未压缩" % (suffix, info.file_size / 1024.0))
 
         if not picked:
             # 丢错了包（别的导出、下载没完成、或者不是小米的包）时给一句人话，
@@ -367,9 +410,10 @@ def main(argv=None) -> int:
         password = resolve_password(args)
         if not password:
             say("")
-            say("没有拿到密码。两种给法任选其一：")
-            say("  1) 在导入窗口里输入（推荐，每次现填，不留痕）")
-            say("  2) python tools/import_zip.py --password 你的密码，或设环境变量 MIFITNESS_ZIP_PASSWORD")
+            say("没有拿到密码。给法任选其一：")
+            say("  1) python tools/import_zip.py <包路径> --password 你的密码（命令行手动导入）")
+            say("  2) 设环境变量 MIFITNESS_ZIP_PASSWORD 再跑")
+            say("  3) 正常路径不用管这一步：双击「从邮箱导入.cmd」，密码由邮件里取。")
             return 3
 
         # 先用最小成员验密码，避免拿错密码去解 199 MB 的文件
@@ -379,7 +423,9 @@ def main(argv=None) -> int:
                 probe.read(16)
         except RuntimeError as exc:
             say("")
-            say("密码不对（%s）。请在导入窗口里重新输入。" % exc)
+            say("密码不对（%s）。" % exc)
+            say("命令行手动导入的话重新跑一次、换一个密码；走邮箱的话直接重跑"
+                "「从邮箱导入.cmd」，它会自动拿最新一封邮件里的密码。")
             return 4
         except NotImplementedError:
             say("")
@@ -388,31 +434,50 @@ def main(argv=None) -> int:
             return 5
 
         say("")
-        say("密码校验通过，开始流式解析（不落盘）…")
+        say("密码校验通过，开始解析（不落盘）…")
         with zf.open(probe_name, pwd=password.encode("utf-8")) as stream:
             raw = read_sport_records(stream)
-        say("  sport_record : %d 场户外跑步" % len(raw))
-
+        # 场次和年份挤一行：年份分布只在「场数比上一版少」时有用（定位导出侧的坏时间戳），
+        # 单独占一行不值当。
         year_counts = collections.Counter(local(r["start"]).year for r in raw)
-        say("  年份分布     : %s" % dict(sorted(year_counts.items())))
+        say("  场次 : %d 场户外跑步（年份 %s）"
+            % (len(raw), " / ".join("%d:%d" % kv for kv in sorted(year_counts.items()))))
 
+        total_raw = len(raw)
         raw = [r for r in raw if local(r["start"]).year >= 2025]
+        dropped_out_of_range = total_raw - len(raw)
         cut = int(datetime.datetime(2025, 1, 1, tzinfo=TZ).timestamp())
         hr_pts, step_pts = [], []
         if FITNESS_SUFFIX in picked:
             with zf.open(picked[FITNESS_SUFFIX], pwd=password.encode("utf-8")) as stream:
                 hr_pts, step_pts = scan_minute_series(stream, cut)
-        say("  逐分钟序列   : 心率点 %d，步数点 %d" % (len(hr_pts), len(step_pts)))
+        # 这一行要在读 195 MB 之后才出现（约 5 秒），是等待期间唯一的心跳 —— 别和上一行合并
+        say("  逐分钟 : 心率 %d 点，步数 %d 点" % (len(hr_pts), len(step_pts)))
 
         runs = build_runs(raw, hr_pts, step_pts)
         months = build_months(runs)
 
-    old_count = previous_run_count()
-    if old_count and len(runs) < old_count and not args.force:
+    # 写不写，只看「哪份更新」，不看场数多少（多弗朗 2026-09-24 的要求）。
+    old_count, old_latest = previous_scope()
+    new_latest = max((r["date"] for r in runs), default="")
+    if old_latest and new_latest and new_latest < old_latest and not args.force:
         say("")
-        say("拒绝写入：这次只解析出 %d 场，上一版有 %d 场。" % (len(runs), old_count))
-        say("导出可能漏了历史（换机 / 同步延迟）。确认没问题就加 --force 再来一次。")
+        say("拒绝写入：这份包里最新的一场是 %s，看板里已经是 %s —— 这是一份更旧的导出包。"
+            % (new_latest, old_latest))
+        say("（判据是「最新的一场」，不是场数：重下一份旧包不该把看板倒推回去。）")
+        say("确实要用它覆盖就加 --force。")
         return 6
+    if old_count and len(runs) < old_count:
+        say("")
+        say("提醒：这次 %d 场，上一版 %d 场（少 %d 场）。但最新一场是 %s，比看板的 %s 新，所以照写。"
+            % (len(runs), old_count, old_count - len(runs), new_latest, old_latest or "—"))
+        # 少数记录的时间戳在导出侧就是坏的（实测出现过：一场 2026 年的跑步变成 2000 年），
+        # 被「只看 2025 年及以后」滤掉 —— 这种情况不是丢了历史。
+        if dropped_out_of_range:
+            say("  少的那部分里有 %d 场时间戳落在 2025 年之前（导出侧异常），被年份规则滤掉了，"
+                "不是历史丢了。" % dropped_out_of_range)
+        else:
+            say("  如果不是你自己删过记录，把这份日志发我看看。")
 
     payload = {
         "generated": local(int(datetime.datetime.now(TZ).timestamp())).strftime("%Y-%m-%d %H:%M"),
@@ -430,9 +495,9 @@ def main(argv=None) -> int:
         handle.write(";\n")
 
     say("")
-    say("完成：%s（%.1f KB）" % (out_path, out_path.stat().st_size / 1024.0))
-    say("  场次 %d（上一版 %d，%+d）  月份 %d 个"
-        % (len(runs), old_count, len(runs) - old_count, len(months)))
+    say("完成：%s（%.1f KB）｜场次 %d（上一版 %d，%+d）｜月份 %d 个"
+        % (out_path, out_path.stat().st_size / 1024.0,
+           len(runs), old_count, len(runs) - old_count, len(months)))
     if PREV_OUT.is_file():
         say("  上一版已备份到 %s" % PREV_OUT.name)
     return 0

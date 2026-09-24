@@ -8,6 +8,10 @@ inbox/*
 !inbox/README.txt
 latest/
 
+# 邮箱凭证与已处理邮件记录。授权码是长期凭证，绝不能进仓库。
+# 内容：mail_config.json（邮箱地址 + IMAP 授权码）、mail_state.json（已处理邮件 UID）
+local/
+
 # Python 缓存
 __pycache__/
 *.pyc

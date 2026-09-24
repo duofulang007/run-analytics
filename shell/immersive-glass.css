@@ -1,0 +1,426 @@
+/* =============================================================================
+   沉浸玻璃外壳 · immersive-glass.css
+   -----------------------------------------------------------------------------
+   主题：**极简白（默认）** —— 纯中性色，无彩色光斑。
+   形态：**无框铺满**（2026-09-24 按多弗朗要求改）：画布几乎占满窗口，
+        不再描边、不再套发丝环，只剩一层很薄的雾面边 + 一层柔和投影。
+        目的：把"框"和留白都还给内容。
+
+   性能约定（踩过卡顿，别再改回去）：
+     · 玻璃背后**不放持续动画** —— backdrop-filter 每帧要重算模糊，动起来必卡。
+       想恢复缓慢漂移就加 ?motion=on。
+     · backdrop-filter 只上在 .glass 这一块，HUD / 遮罩都用纯半透明底。
+     · 画布限死像素上限：模糊开销随面积线性增长。
+
+   要调外观，**只改下面 :root 里的令牌**，不要改组件规则。
+   ============================================================================= */
+
+/* ======================== 主题 A：极简白（默认） ========================== */
+:root {
+  /* ---------- 1. 画布尺寸 ------------------------------------------------
+     几乎铺满窗口：只留 1vw/2vh 的一线背景，让画布"浮"着，又不浪费画面。
+     上限是给超大屏的刹车（也是模糊开销的天花板）。 */
+  --stage-w: 98vw;
+  --stage-h: 96vh;
+  --stage-max-w: 1780px;
+  --stage-max-h: 1140px;
+
+  /* ---------- 2. 玻璃几何（两个主题共用） -------------------------------
+     无框形态：不再有描边，只靠"薄边 + 投影"和背景分开。
+     pad 收窄到 10px —— 这一圈就是唯一的留白，再宽就是在浪费内容面积。 */
+  --glass-radius: 16px;          /* 外层圆角 */
+  --glass-inner-radius: 10px;    /* 内层圆角：把原应用的直角包住 */
+  --glass-pad: 10px;             /* 玻璃薄边厚度 */
+  --glass-blur: 24px;            /* backdrop-filter 模糊（?blur=0 可关，换帧率） */
+  --glass-saturate: 180%;
+
+  /* ---------- 3. 底色与"雾光" -------------------------------------------
+     底色只用「冷白 → 浅灰」两端近乎同色的渐变（色差越小越自然，不会出色带）。 */
+  --shell-bg: #fbfcfe;
+  --shell-bg-2: #e8ecf3;
+  --glow-1: rgba(255, 255, 255, 0.95);
+  --glow-2: rgba(255, 255, 255, 0.80);
+  --glow-3: rgba(214, 222, 234, 0.55);
+  --glow-4: rgba(255, 255, 255, 0.60);
+  --vignette: radial-gradient(130% 100% at 50% 38%,
+              rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 58%);
+
+  /* ---------- 4. 玻璃本体（白玻璃） ------------------------------------- */
+  --glass-fill: rgba(255, 255, 255, 0.62);
+  --glass-fill-2: rgba(255, 255, 255, 0.38);
+  /* 无框：只有投影 + 内高光，不再有 border / 发丝环（那就是"框"本身） */
+  --glass-shadow:
+    0 26px 70px -30px rgba(15, 23, 42, 0.30),
+    0 6px 20px -12px rgba(15, 23, 42, 0.16);
+  --glass-inset:
+    inset 0 1px 0 rgba(255, 255, 255, 0.90),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.50);
+
+  /* 画布垫底：透明。看板自身是不透明的浅色页面，垫底只在
+     「圆角被裁掉的四个角」露出来 —— 透明就让玻璃质感直接透出来。 */
+  --glass-canvas-tint: transparent;
+  --frame-bg: #f6f7f9;                       /* 与看板页面底色一致：装载时不闪 */
+  --inspect-ring: rgba(15, 23, 42, 0.10);    /* 检查模式（按住 Ctrl）的一圈提示 */
+
+  /* ---------- 5. HUD（浮在画布下沿的只读状态条） ------------------------ */
+  --hud-inset: 8px;
+  --hud-bg: rgba(255, 255, 255, 0.86);
+  --hud-line: rgba(15, 23, 42, 0.08);
+  --hud-ink: #111827;
+  --hud-ink-2: #6b7280;
+  --hud-chip-ink: #475569;
+  --hud-chip-line: rgba(71, 85, 105, 0.28);
+  --hud-icon: #475569;
+  --hud-btn-bg: rgba(15, 23, 42, 0.04);
+  --hud-btn-hover: rgba(15, 23, 42, 0.09);
+  --hud-fade: 260ms;
+
+  /* ---------- 6. 装载遮罩 ----------------------------------------------- */
+  --boot-bg: rgba(255, 255, 255, 0.82);
+  --boot-ink: #6b7280;
+  --boot-err: #b91c1c;
+
+  /* ---------- 7. 字号与字体 ---------------------------------------------
+     --ui-scale 由 JS 写入（= 画布缩放，钳在 0.8~1），HUD 字号跟着走 ——
+     小窗口里画布缩小时，HUD 一起收，不会出现"HUD 比看板还大"的穿模感。 */
+  --ui-scale: 1;
+  --fs-2: 12px;
+  --fs-3: 11px;
+  --ff: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+}
+
+/* ======================== 主题 B：深色玻璃（?theme=dark） ================= */
+html[data-theme="dark"] {
+  --shell-bg: #0b1120;
+  --shell-bg-2: #070b14;
+  --glow-1: rgba(255, 255, 255, 0.10);
+  --glow-2: rgba(148, 163, 184, 0.16);
+  --glow-3: rgba(120, 140, 175, 0.13);
+  --glow-4: rgba(255, 255, 255, 0.06);
+  --vignette: radial-gradient(120% 90% at 50% 45%,
+              rgba(0, 0, 0, 0) 40%, rgba(2, 6, 18, 0.72) 100%);
+
+  --glass-fill: rgba(255, 255, 255, 0.07);
+  --glass-fill-2: rgba(255, 255, 255, 0.015);
+  --glass-shadow:
+    0 32px 90px -30px rgba(0, 0, 0, 0.90),
+    0 10px 26px -12px rgba(0, 0, 0, 0.60);
+  --glass-inset:
+    inset 0 1px 0 rgba(255, 255, 255, 0.20),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+  --inspect-ring: rgba(255, 255, 255, 0.16);
+
+  --hud-bg: rgba(11, 17, 32, 0.62);
+  --hud-line: rgba(255, 255, 255, 0.14);
+  --hud-ink: rgba(255, 255, 255, 0.92);
+  --hud-ink-2: rgba(255, 255, 255, 0.56);
+  --hud-chip-ink: rgba(255, 255, 255, 0.72);
+  --hud-chip-line: rgba(255, 255, 255, 0.22);
+  --hud-icon: rgba(255, 255, 255, 0.72);
+  --hud-btn-bg: rgba(255, 255, 255, 0.06);
+  --hud-btn-hover: rgba(255, 255, 255, 0.16);
+
+  --boot-bg: rgba(9, 14, 26, 0.72);
+  --boot-ink: rgba(255, 255, 255, 0.56);
+  --boot-err: #fca5a5;
+}
+
+/* =============================================================================
+   基础：全屏、无滚动条、不选中、光标统一、字体抗锯齿
+   ============================================================================= */
+* { box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;                     /* 隐藏浏览器滚动条（外壳自己永不滚动） */
+  overscroll-behavior: none;
+  background: linear-gradient(165deg, var(--shell-bg), var(--shell-bg-2));
+  color: var(--hud-ink);
+  font-family: var(--ff);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;  /* 缩放后文字不糊的关键之一 */
+  -moz-osx-font-smoothing: grayscale;
+  cursor: default;
+}
+body { user-select: none; -webkit-user-select: none; }
+
+/* =============================================================================
+   雾光层（玻璃后面那一层，供给 backdrop-filter 去模糊）
+   **默认静止**：只有 <html data-motion="on"> 时才漂移（?motion=on）。
+   ============================================================================= */
+.aurora {
+  position: fixed;
+  inset: -10vmax;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.aurora .blob {
+  position: absolute;
+  display: block;
+  border-radius: 50%;
+  transform: translate3d(0, 0, 0);
+}
+.aurora .b1 { width: 68vmax; height: 68vmax; left: -10vmax; top: -16vmax;
+              background: radial-gradient(closest-side, var(--glow-1), transparent 74%); }
+.aurora .b2 { width: 52vmax; height: 52vmax; right: -8vmax;  top: -8vmax;
+              background: radial-gradient(closest-side, var(--glow-2), transparent 74%); }
+.aurora .b3 { width: 64vmax; height: 64vmax; right: -12vmax; bottom: -24vmax;
+              background: radial-gradient(closest-side, var(--glow-3), transparent 76%); }
+.aurora .b4 { width: 46vmax; height: 46vmax; left: 12vmax;  bottom: -16vmax;
+              background: radial-gradient(closest-side, var(--glow-4), transparent 76%); }
+
+/* 想让它动，得显式开：动的是"玻璃背后的东西"，每帧都要重算模糊，代价很实在 */
+html[data-motion="on"] .aurora .blob {
+  will-change: transform;
+  animation: drift 64s ease-in-out infinite alternate;
+}
+html[data-motion="on"] .aurora .b2 { animation-duration: 76s; animation-delay: -18s; }
+html[data-motion="on"] .aurora .b3 { animation-duration: 88s; animation-delay: -32s; }
+html[data-motion="on"] .aurora .b4 { animation-duration: 70s; animation-delay: -8s; }
+
+@keyframes drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(2vmax, -1.5vmax, 0) scale(1.03); }
+  to   { transform: translate3d(-2vmax, 1.5vmax, 0) scale(0.98); }
+}
+
+/* 亮角/暗角：把视线收拢到中央（两个主题共用一条令牌） */
+.vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: var(--vignette);
+}
+
+/* =============================================================================
+   舞台：撑满视口，把画布居中
+   ============================================================================= */
+.stage {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* =============================================================================
+   画布本体（无框）：只剩一层极薄的雾面 + 一层柔光投影
+   ============================================================================= */
+.glass {
+  position: relative;
+  width: var(--stage-w);
+  height: var(--stage-h);
+  max-width: var(--stage-max-w);
+  max-height: var(--stage-max-h);
+  padding: var(--glass-pad);
+
+  border-radius: var(--glass-radius);
+  /* 不再有 border，也不再有 ::after 发丝环 —— 那圈线就是"框" */
+
+  background: linear-gradient(180deg, var(--glass-fill), var(--glass-fill-2));
+
+  /* 玻璃的核心：模糊背后 + 提饱和。前后各写一遍是给老 Safari 的兼容前缀 */
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+
+  box-shadow: var(--glass-shadow), var(--glass-inset);
+
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 降级：不支持 backdrop-filter 时改用纯半透明背景 —— 玻璃感差些，可读性不受影响 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass {
+    background: linear-gradient(180deg,
+      color-mix(in srgb, var(--shell-bg) 92%, #ffffff),
+      color-mix(in srgb, var(--shell-bg-2) 92%, #ffffff));
+    background-color: var(--shell-bg);
+  }
+  .aurora { opacity: 0.6; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora .blob { animation: none !important; }
+  .hud, .boot, .hint-fade { transition: none; }
+}
+
+/* =============================================================================
+   画布：裁剪层 → 缩放层 → iframe
+   clip  ：薄边之内的整块区域，圆角 + 溢出裁掉（画布形状由它定义）
+   scaler：translate(dx,dy) + scale(k)，原点左上；尺寸 = 虚拟视口尺寸
+   frame ：比虚拟视口宽出 scrollbarGutter 的那一条由 scaler 的 overflow 裁掉
+   ============================================================================= */
+.clip {
+  position: absolute;
+  inset: var(--glass-pad);
+  overflow: hidden;
+  border-radius: var(--glass-inner-radius);
+  background: var(--glass-canvas-tint);
+  contain: paint;                       /* 自成一块绘制区域，缩放/平移不外溢 */
+}
+
+.scaler {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: hidden;                     /* 裁掉跨源补偿出来的滚动条那一条 */
+  transform-origin: top left;           /* 必须！缩放原点在左上，偏移才好算 */
+  will-change: transform;               /* 缩放/平移走合成层，避免每帧重排 */
+  /* 视觉上恒为 --glass-inner-radius：实际值 = 10 / k，由 JS 按当前缩放写回 */
+  border-radius: var(--glass-inner-radius);
+}
+
+.frame {
+  display: block;
+  border: 0;
+  background: var(--frame-bg);
+  color-scheme: light;                  /* 看板是浅色主题，别让 UA 按深色渲染表单控件 */
+}
+
+/* =============================================================================
+   接管层（检查模式）：按住 Ctrl 时才铺开
+   iframe 是独立文档，滚轮/拖拽在它里面就被吃掉了，外壳收不到 ——
+   这一层把指针事件收回外壳，Ctrl+滚轮才能以光标为锚点缩放。
+   ============================================================================= */
+.pan-layer {
+  position: absolute;
+  inset: var(--glass-pad);
+  z-index: 2;
+  border-radius: var(--glass-inner-radius);
+  opacity: 0;
+  pointer-events: none;
+  cursor: grab;
+  transition: opacity 140ms ease;
+}
+.pan-layer.on {
+  opacity: 1;
+  pointer-events: auto;
+  box-shadow: inset 0 0 0 1px var(--inspect-ring);
+}
+.pan-layer.dragging { cursor: grabbing; }
+
+/* =============================================================================
+   HUD：浮在画布下沿的只读状态条（鼠标不动 2.6s 自动隐去）
+   pointer-events: none —— 它永远不吃看板的事件；字号用 em 跟随 --ui-scale。
+   ============================================================================= */
+.hud {
+  position: absolute;
+  left: calc(var(--glass-pad) + var(--hud-inset));
+  right: calc(var(--glass-pad) + var(--hud-inset));
+  bottom: var(--hud-inset);
+  z-index: 3;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1em;
+
+  font-size: calc(var(--fs-2) * var(--ui-scale));   /* ← 跟着画布一起缩 */
+  color: var(--hud-ink-2);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity var(--hud-fade) ease, transform var(--hud-fade) ease;
+}
+.hud.on { opacity: 1; transform: none; }
+
+/* 左右各一颗胶囊、中间留空 —— 比通栏长条更克制，也更少遮挡看板 */
+.hud-left, .hud-right {
+  display: flex;
+  align-items: center;
+  gap: .67em;
+  min-width: 0;
+  max-width: 70%;
+  padding: .42em .84em;
+  border-radius: 999px;
+  border: 1px solid var(--hud-line);
+  background: var(--hud-bg);
+  box-shadow: 0 4px 16px -8px rgba(15, 23, 42, 0.22);
+}
+
+.hud-icon { width: 1.17em; height: 1.17em; flex: none; color: var(--hud-icon); }
+.hud-title { color: var(--hud-ink); font-weight: 600; white-space: nowrap; }
+.hud-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hud-chip {
+  padding: .08em .58em;
+  border-radius: 999px;
+  border: 1px solid var(--hud-chip-line);
+  color: var(--hud-chip-ink);
+  font-size: .92em;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+.hud-zoom {
+  color: var(--hud-ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: .78;
+}
+
+.hud-btn {
+  width: 2em;
+  height: 2em;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--hud-line);
+  background: var(--hud-btn-bg);
+  color: var(--hud-ink);
+  cursor: default;
+  pointer-events: auto;                 /* 只有按钮可点 */
+  opacity: 0;                           /* HUD 隐去时它们也不该被点到 */
+  transition: opacity var(--hud-fade) ease, background 160ms ease;
+}
+.hud.on .hud-btn { opacity: 1; }
+.hud-btn:hover { background: var(--hud-btn-hover); }
+.hud-btn svg { width: 1.08em; height: 1.08em; }
+
+/* 「复位到适配」只在真的放大过之后才出现（没放大过就没什么可复位的） */
+.hud-btn.fit { display: none; }
+.hud.zoomed .hud-btn.fit { display: grid; }
+
+/* =============================================================================
+   开工提示 & 装载遮罩
+   ============================================================================= */
+.hint-fade {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--glass-pad) + 30px * var(--ui-scale));
+  transform: translateX(-50%);
+  z-index: 3;
+  padding: .36em .92em;
+  border-radius: 999px;
+  border: 1px solid var(--hud-line);
+  background: var(--hud-bg);
+  color: var(--hud-ink-2);
+  font-size: calc(var(--fs-3) * var(--ui-scale));
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 420ms ease;
+}
+.hint-fade.on { opacity: 1; }
+
+.boot {
+  position: absolute;
+  inset: var(--glass-pad);
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  border-radius: var(--glass-inner-radius);
+  background: var(--boot-bg);
+  color: var(--boot-ink);
+  font-size: var(--fs-2);
+  letter-spacing: 0.3px;
+  transition: opacity 300ms ease;
+}
+.boot.off { opacity: 0; pointer-events: none; }
+.boot a { color: var(--hud-ink); }
+.boot .boot-err { color: var(--boot-err); }
