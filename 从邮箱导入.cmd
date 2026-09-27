@@ -47,30 +47,31 @@ goto nopython
 
 :run
 set "PYTHONIOENCODING=utf-8"
-rem No arguments -> default to --notify. The popup is the whole point of this
-rem entry point (mifitness package lands, data refreshes, "you can look now").
-rem Explicit arguments (--check / --peek / --dry-run) are passed through untouched.
+rem Pass optional fetch_from_mail.py arguments through; successful imports stay in this console.
 set "ARGS=%*"
-if "%~1"=="" set "ARGS=--notify"
 echo Interpreter: %PY%
 echo.
 %PY% "%FETCH%" %ARGS%
+set "SCRIPT_EXIT=%ERRORLEVEL%"
+if /i "%RUN_ANALYTICS_NO_PAUSE%"=="1" exit /b %SCRIPT_EXIT%
 echo.
-echo Exit code: %ERRORLEVEL%
+echo Exit code: %SCRIPT_EXIT%
 echo.
 pause
-exit /b 0
+exit /b %SCRIPT_EXIT%
 
 :missing
 echo [ERROR] tools\fetch_from_mail.py was not found:
 echo         %FETCH%
 echo Make sure this file still sits in the run-analytics project root.
 echo.
+if /i "%RUN_ANALYTICS_NO_PAUSE%"=="1" exit /b 1
 pause
 exit /b 1
 
 :nopython
 echo [ERROR] No Python 3 found. Install Python 3 or add it to PATH.
 echo.
+if /i "%RUN_ANALYTICS_NO_PAUSE%"=="1" exit /b 1
 pause
 exit /b 1

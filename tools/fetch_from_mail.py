@@ -7,7 +7,7 @@
 
 现在的分工：
     人：登录小米 → 申请导出 → 收到邮件 → 点链接 → 点「文件 #1」（包落到 D:\\网页下载）
-    脚本：从邮件里取密码 → 捡起本地最新的包 → 导入 → 弹窗告知可以看板了
+    脚本：从邮件里取密码 → 捡起本地最新的包 → 导入看板数据
 
 为什么「点文件 #1」这一步不能自动化：那个下载链接认 account.xiaomi.com 的登录态，
 裸 HTTP 请求会被重定向到登录页（2026-09-24 实测，最终地址是 /fe/service/login）。
@@ -32,8 +32,8 @@
    已经在状态里记过的 UID **在发请求之前**就跳过，所以定时任务重复跑时几乎是零流量。
 7. **只用 PEEK，不留痕迹。** 取正文用 `BODY.PEEK[]` 而不是 `RFC822` —— 后者等价于
    `BODY[]`，会把邮件标记成已读，等于替用户改动了邮箱状态。这个工具只读，不该有副作用。
-8. **`--notify` 是给「不用守着」用的。** 小米侧人工做完之后，邮件一到就自动跑完并弹窗
-   告知可以看板了；没有新邮件时一声不吭。
+8. **不弹完成窗。** 看板内发起刷新时由看板展示进度并自动重载；直接运行脚本时
+   结果只写在控制台。
 9. **只翻收件箱，这是刻意的。** 小米的导出通知落在收件箱，没必要再去别的文件夹翻找。
    会话在 connect() 里 `SELECT INBOX` 一次，之后所有请求都在这个文件夹内。
 10. **下载那一跳交给 tools/auto_download.py，本文件只负责调它。** 小米那个下载链接认
@@ -51,7 +51,6 @@
     python tools/fetch_from_mail.py --peek       # 打印最新一封邮件的结构（密钥打码），用来校准正则
     python tools/fetch_from_mail.py --dry-run    # 只说会用哪个本地包、有几个密码可试
     python tools/fetch_from_mail.py              # 完整跑：取密码 → 找本地包 → 导入 data.js
-    python tools/fetch_from_mail.py --notify     # 同上，成功后弹窗告知「可以打开看板了」
     python tools/fetch_from_mail.py --all        # 忽略已处理记录，重扫（排查用）
 
 返回码
@@ -793,97 +792,6 @@ def run_import(zip_path: Path, password: str) -> int:
                 pass
 
 
-# ------------------------------------------------------------------ 到达通知
-# 颜色值与 tools/import_gui.py 保持一致（同一套界面语言）。
-# 刻意各自定义而不互相 import：import_gui.py 顶层就 `import tkinter`，
-# 一旦这里动态加载它，没有 GUI 的环境会连「导入成功」这句话都说不出来。
-NOTIFY_BG = "#ffffff"
-NOTIFY_TEXT = "#1f2328"
-NOTIFY_MUTED = "#6b7280"
-NOTIFY_ACCENT = "#2f6feb"
-NOTIFY_W, NOTIFY_H = 440, 240
-DASHBOARD = PROJECT_DIR / "index.html"
-
-
-def read_summary() -> str:
-    """从 data.js 里摘出场次与最近日期，给通知窗当副标题。
-
-    只用正则摘字段，不解析整个 JSON —— data.js 有 150KB 以上，摘这两样够了。
-    与 tools/import_gui.py 的 dashboard_meta() 是同一套摘法（各自独立实现，理由同上）。
-    """
-    data_file = PROJECT_DIR / "data.js"
-    if not data_file.is_file():
-        return "数据已更新"
-    text = data_file.read_text(encoding="utf-8", errors="ignore")
-    dates = re.findall(r'"date"\s*:\s*"(\d{4}-\d{2}-\d{2})"', text)
-    if not dates:
-        return "数据已更新"
-    return "共 %d 场 · 截至 %s" % (len(re.findall(r'"id"\s*:', text)), max(dates))
-
-
-def notify_ready() -> None:
-    """弹一个「数据已更新」的小窗，带「打开历史看板」。
-
-    这正是多弗朗要的那一步：小米侧他自己做，但希望「等这个包真正发到邮箱后，
-    最后弹一条消息跟我说，我可以打开看板查看数据」。调用方保证只在真的导入了
-    新数据时才调 —— 没新邮件时不该弹任何东西。
-
-    置顶 + 响一声是刻意的：这个窗的意义就是「你不用守着」，那它就得抢得到注意力。
-    没有 tkinter 的环境（某些计划任务上下文）不因此失败：退回控制台一句话，
-    因为数据其实已经导入成功了，通知失败不该被说成导入失败。
-    """
-    summary = read_summary()
-    try:
-        import tkinter as tk
-    except Exception:
-        say("")
-        say("数据已更新（%s）。直接双击 %s 就能查看。" % (summary, DASHBOARD))
-        return
-
-    def open_dashboard():
-        try:
-            os.startfile(str(DASHBOARD))  # type: ignore[attr-defined]
-        except Exception as exc:
-            say("打不开看板：%s" % exc)
-        root.destroy()
-
-    try:
-        root = tk.Tk()
-        root.title("数据已更新 · run-analytics")
-        root.configure(bg=NOTIFY_BG)
-        root.resizable(False, False)
-        root.attributes("-topmost", True)
-        root.update_idletasks()
-        x = max(0, (root.winfo_screenwidth() - NOTIFY_W) // 2)
-        y = max(0, (root.winfo_screenheight() - NOTIFY_H) // 3)
-        root.geometry("%dx%d+%d+%d" % (NOTIFY_W, NOTIFY_H, x, y))
-
-        tk.Label(root, text="数据已更新", bg=NOTIFY_BG, fg=NOTIFY_TEXT,
-                 font=("Microsoft YaHei UI", 15, "bold")).pack(
-                     anchor="w", padx=22, pady=(20, 2))
-        tk.Label(root, text=summary, bg=NOTIFY_BG, fg=NOTIFY_MUTED,
-                 font=("Microsoft YaHei UI", 9)).pack(anchor="w", padx=22)
-        tk.Label(root, text="可以打开历史看板查看了。", bg=NOTIFY_BG, fg=NOTIFY_TEXT,
-                 font=("Microsoft YaHei UI", 10)).pack(anchor="w", padx=22, pady=(14, 0))
-
-        actions = tk.Frame(root, bg=NOTIFY_BG)
-        actions.pack(anchor="w", padx=22, pady=(18, 0))
-        tk.Button(actions, text="打开历史看板", command=open_dashboard, relief="flat",
-                  bg=NOTIFY_ACCENT, fg="#ffffff", activebackground="#2559c0",
-                  activeforeground="#ffffff", font=("Microsoft YaHei UI", 10, "bold"),
-                  padx=18, pady=6, cursor="hand2").pack(side="left")
-        tk.Button(actions, text="知道了", command=root.destroy, relief="flat",
-                  bg="#e8eaee", fg=NOTIFY_TEXT, activebackground="#dde0e6",
-                  font=("Microsoft YaHei UI", 10), padx=16, pady=6,
-                  cursor="hand2").pack(side="left", padx=(10, 0))
-
-        root.bell()
-        root.mainloop()
-    except Exception as exc:
-        say("通知窗没能弹出来（%s: %s），但数据已经导入成功了。"
-            % (type(exc).__name__, exc))
-
-
 # ------------------------------------------------------------------ 主流程
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="QQ 邮箱小米导出包 → 一键导入 run-analytics")
@@ -896,8 +804,9 @@ def main(argv=None) -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="只说会用哪个本地包、有几个密码可试，不导入")
     parser.add_argument("--all", action="store_true", help="忽略已处理记录，重扫全部候选")
-    parser.add_argument("--notify", action="store_true",
-                        help="导入成功后弹窗告知「可以打开看板了」（配计划任务用）")
+    # Keep accepting the old option so existing scheduled commands do not break;
+    # successful imports no longer open a separate completion window.
+    parser.add_argument("--notify", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     user, auth_code, source = load_credentials(args)
@@ -1131,9 +1040,7 @@ def main(argv=None) -> int:
     # 只保留最新一份包，旧的清掉（多弗朗的要求：最终只留一份新文件）
     prune_old_packages(package)
     say("")
-    say("看板已更新：点「打开历史看板」，或直接双击 index.html。")
-    if args.notify:
-        notify_ready()
+    say("看板数据已更新。")
     return 0
 
 

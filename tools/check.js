@@ -1,17 +1,14 @@
 /**
- * run-analytics 自检脚本 —— 改完 app.js / index.html / styles.css 之后跑一遍
+ * run-analytics 自检脚本 —— 改完 app.js / index.html / styles.css / metrics.py 之后跑一遍
  *
  *     node tools/check.js            # 逻辑自检（无依赖，纯 Node）
- *     node tools/check.js --browser  # 额外跑真实 Chrome 截图（需要 playwright-core）
+ *     node tools/check.js --browser  # 输出经总控台手动核验的项目，不启动浏览器
  *
  * 为什么要有两轨：
- *   1) 逻辑自检用 vm + DOM 桩把 app.js 真跑一遍，覆盖「所有页签 × 所有年份 ×
- *      所有月份两两组合 × 抽样的每一天」。它能抓到抛异常、拿不到元素、
- *      渲染出空内容这类问题，而且秒级完成、不需要浏览器。
- *   2) 但它**看不见 CSS**。实测踩过一次：`.cal button { background: … }` 的优先级
- *      (0,1,1) 压过了 `.heat1` 的 (0,1,0)，于是日历所有格子都是同一个颜色 ——
- *      桩里一切正常，真实浏览器里整片日历是空白的。所以颜色/尺寸这类问题
- *      必须靠 --browser 抽样 computed style。
+ *   1) 逻辑自检用 vm + 轻量 DOM 桩运行 app.js 和离线工具轨，覆盖页面证据跳转及工具入口。它可以抓运行错误和数据联动问题，但不代表真实浏览器布局已验收。
+ *   2) 真实页面的尺寸、响应式布局和工具轨悬浮行为需从 APEX Console 手动查看。
+ *
+ * 旧版的检查项（6 个页签、日历格子、月份两两组合、子页签切换）已随页面改版移除。
  */
 "use strict";
 
@@ -22,10 +19,16 @@ const vm = require("vm");
 const ROOT = path.resolve(__dirname, "..");
 const wantBrowser = process.argv.includes("--browser");
 
+const errors = [];
+function ok(name, cond, detail) {
+  if (!cond) errors.push(name + (detail ? " :: " + detail : ""));
+}
+
 // ------------------------------------------------------------------ DOM 桩
 function makeEl(id) {
   const el = {
     id, _html: "", _text: "", className: "", value: "", dataset: {}, options: [],
+    attrs: {}, _queries: {},
     classList: {
       _s: new Set(),
       add(c) { this._s.add(c); },
@@ -36,54 +39,79 @@ function makeEl(id) {
     style: { cssText: "", setProperty(k, v) { this[k] = v; } },
     handlers: {},
     addEventListener(t, fn) { (this.handlers[t] = this.handlers[t] || []).push(fn); },
+    setAttribute(k, v) { this.attrs[k] = String(v); },
+    getAttribute(k) { return this.attrs[k]; },
     appendChild(c) { return c; },
     removeChild(c) { return c; },
-    querySelectorAll() { return []; },
+    querySelectorAll(selector) {
+      if (this._queries[selector]) return this._queries[selector];
+      const matches = [];
+      const rx = /<button\b([^>]*?)>([\s\S]*?)<\/button\s*>/gi;
+      let m;
+      while ((m = rx.exec(this.innerHTML))) {
+        const tag = "button", attrs = {};
+        const ar = /([^\s=]+)="([^"]*)"/g;
+        let a;
+        while ((a = ar.exec(m[1]))) attrs[a[1]] = a[2];
+        const isMatch = selector === "button" ? tag === "button"
+          : selector === "[data-history-run]" ? tag === "button" && attrs["data-history-run"] != null
+                    : selector === "[data-evidence-run]" ? tag === "button" && attrs["data-evidence-run"] != null
+                    : selector === "[data-week-key]" ? tag === "button" && attrs["data-week-key"] != null
+                      : selector === "[data-week-run]" ? tag === "button" && attrs["data-week-run"] != null
+                      : selector === "[data-fitness-run]" ? tag === "button" && attrs["data-fitness-run"] != null
+                  : selector === "[data-view-mode]" ? tag === "button" && attrs["data-view-mode"] != null : false;
+        if (!isMatch) continue;
+        const node = makeEl(tag);
+        node.attrs = attrs;
+        node.className = attrs.class || "";
+        Object.keys(attrs).forEach(k => {
+          if (k.indexOf("data-") === 0) node.dataset[k.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = attrs[k];
+        });
+        node.textContent = (m[2] || "").replace(/<[^>]*>/g, "");
+        node.click = function () {
+          const event = { key: "", preventDefault() { } };
+          if (typeof this.onclick === "function") this.onclick.call(this, event);
+          (this.handlers.click || []).forEach(fn => fn.call(this, event));
+        };
+        node.parentNode = this;
+        matches.push(node);
+      }
+      this._queries[selector] = matches;
+      return matches;
+    },
     querySelector() { return null; },
     closest() { return null; },
     getContext() { return { __el: id }; },
     getBoundingClientRect() { return { width: 600, height: 300, top: 0, left: 0 }; },
     clientWidth: 1340,
+    hidden: false,
+    scrollIntoView() { },
     parentNode: null
   };
-  Object.defineProperty(el, "innerHTML", { get() { return this._html; }, set(v) { this._html = String(v); }, configurable: true });
+  Object.defineProperty(el, "innerHTML", { get() { return this._html; }, set(v) { this._html = String(v); this._queries = {}; }, configurable: true });
   Object.defineProperty(el, "textContent", { get() { return this._text; }, set(v) { this._text = String(v); }, configurable: true });
   return el;
 }
 
 const els = {};
-const chartCfgs = [];
-const errors = [];
+// 取值一律走这个：app.js 一旦中途抛错，某些元素根本没被创建，
+// 直接读 els.x.innerHTML 会让自检自己崩掉，把真正的错误盖住（踩过）。
+const html = id => (els[id] ? els[id].innerHTML : "");
+const text = id => (els[id] ? els[id].textContent : "");
+// 标题和统计说明使用 textContent，也纳入检查。
+const any = id => html(id) + text(id);
 
 function stubContext() {
-  const TABS = ["overview", "daily", "gait", "single", "compare", "table"];
-  const tabBtns = TABS.map(t => { const b = makeEl("tab-" + t); b.dataset = { tab: t }; return b; });
-  const panels = TABS.map(t => makeEl("panel-" + t));
-
   const doc = {
     body: makeEl("body"),
     getElementById(id) { return els[id] || (els[id] = makeEl(id)); },
     createElement(tag) { return makeEl(tag); },
-    querySelector(sel) {
-      if (sel === ".calflex") return els.calflex || (els.calflex = makeEl("calflex"));
-      if (sel === ".calwrap") return els.calwrap || (els.calwrap = makeEl("calwrap"));
-      return null;
-    },
-    querySelectorAll(sel) {
-      if (sel === ".tabs button") return tabBtns;
-      if (sel === ".panel") return panels;
-      return [];
-    },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
     addEventListener() { }
   };
-
-  function Chart(el, cfg) { this.el = el; this.cfg = cfg; chartCfgs.push(cfg); }
-  Chart.prototype.destroy = function () { };
-  Chart.prototype.resize = function () { };
-  Chart.defaults = { font: {}, color: "" };
-
   const ctx = {
-    window: null, document: doc, Chart, console, setTimeout, clearTimeout,
+    window: null, document: doc, console, setTimeout, clearTimeout,
     location: { hash: "" }, history: { replaceState() { } },
     getComputedStyle() { return { fontFamily: "Segoe UI", getPropertyValue() { return "3px"; } }; }
   };
@@ -93,239 +121,174 @@ function stubContext() {
   return ctx;
 }
 
+// ------------------------------------------------------------------ 页面与数据自检
 function main() {
   const ctx = stubContext();
-  const run = (name, fn) => {
-    try { fn(); } catch (e) {
-      errors.push(name + " :: " + String(e && e.stack ? e.stack.split("\n").slice(0, 2).join(" | ") : e));
-    }
+  const markup = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(ROOT, "styles.css"), "utf8");
+  ctx.document.getElementById("modeSwitch").innerHTML =
+    '<button data-view-mode="after">跑后</button>' +
+    '<button data-view-mode="fitness">体能变化</button>' +
+    '<button data-view-mode="week">周复盘</button>' +
+    '<button data-view-mode="history">历史</button>';
+  function run(name, fn) {
+    try { fn(); } catch (e) { errors.push(name + " :: " + String(e)); }
+  }
+  run("load data.js", () => vm.runInContext(fs.readFileSync(path.join(ROOT, "data.js"), "utf8"), ctx));
+  run("load app.js", () => vm.runInContext(fs.readFileSync(path.join(ROOT, "app.js"), "utf8"), ctx));
+  const D = ctx.window.RUNNER_DATA || {};
+  const M = D.metrics || {};
+  const B = M.board || {};
+  const runs = D.runs || [];
+  const weeks = (((B.timeline || {}).week || {}).rows || []);
+  const fitness = B.fitness || {};
+  const click = (parent, selector, predicate) => {
+    const target = parent.querySelectorAll(selector).find(predicate || (() => true));
+    if (!target) { errors.push("找不到交互目标 " + selector); return false; }
+    target.click();
+    return true;
   };
 
-  run("load data.js", () => vm.runInContext(fs.readFileSync(path.join(ROOT, "data.js"), "utf8"), ctx, { filename: "data.js" }));
-  run("load app.js", () => vm.runInContext(fs.readFileSync(path.join(ROOT, "app.js"), "utf8"), ctx, { filename: "app.js" }));
+  ok("跑步记录或周汇总缺失", runs.length > 0 && weeks.length >= 5);
+  ok("首页缺最新一场与近况", markup.includes('id="afterView"') &&
+    markup.includes('id="latestVerdict"') && markup.includes('id="recentEvidence"'));
+  ok("周复盘或历史入口缺失", markup.includes('id="weekView"') &&
+    markup.includes('id="historyView"') && markup.includes('id="historyMonth"'));
+  ok("首页近期跑量与预计算不一致", text("recentKm") ===
+    B.insights.recent28.km.toFixed(1) + " km");
+  ok("体能变化入口或图表缺失", markup.includes('id="fitnessView"') &&
+    html("fitnessChart").includes("fitness-line-base") && html("fitnessChart").includes("fitness-line-recent"));
+  ok("训练基础与近期负荷数据不完整", fitness.series && fitness.series.length > 20 &&
+    fitness.runs && fitness.runs.length === runs.length);
+  ok("每场表现列表未覆盖全部记录",
+    (html("fitnessRunList").match(/data-fitness-run=/g) || []).length === runs.length);
+  ok("最新一场体能摘要与预计算不一致",
+    html("fitnessSummary").includes(fitness.base.toFixed(1)) &&
+    html("fitnessSummary").includes(fitness.recent.toFixed(1)));
+  ok("逐场比较误用了未来跑步", fitness.runs.every(item =>
+    (item.comparableIds || []).every(id => {
+      const source = runs.find(run => String(run.id) === String(id));
+      return source && source.date < item.date;
+    })));
+  ok("近期变化没有原始场次入口", html("recentEvidence").includes("data-evidence-run="));
+  ok("最新一场对照场次不可追溯",
+    B.insights.last.comparable.ids.length === B.insights.last.comparable.n);
+  ok("近况场次不可追溯", B.insights.recent28.ids.length === B.insights.recent28.n);
+  ok("历史没有列出全部场次",
+    (html("historyList").match(/data-history-run=/g) || []).length === runs.length);
+  ok("单场分段没有显示", html("historyDetail").includes("segment-table"));
 
-  const D = ctx.window.RUNNER_DATA;
-  if (!D) { console.error("data.js 没有产出 window.RUNNER_DATA"); process.exit(1); }
+  const evidence = els.recentEvidence.querySelectorAll("[data-evidence-run]")[0];
+  if (evidence) {
+    evidence.click();
+    const runId = evidence.getAttribute("data-evidence-run");
+    const source = runs.find(r => String(r.id) === runId);
+    ok("结论无法打开原始场次", source && !els.historyView.hidden &&
+      html("historyDetail").includes(source.date));
+  }
 
-  const fire = (id, type, ev) => els[id].handlers[type][0].call(els[id], ev);
-  const byData = (obj) => ({ target: { closest: () => obj } });
+  click(els.modeSwitch, "[data-view-mode]", b => b.getAttribute("data-view-mode") === "fitness");
+  ok("体能变化页面没有显示", !els.fitnessView.hidden && els.afterView.hidden);
+  const improved = fitness.runs.find(item => item.signal === "improved");
+  if (improved) {
+    click(els.fitnessRunList, "[data-fitness-run]",
+      b => b.getAttribute("data-fitness-run") === String(improved.id));
+    ok("提升线索没有比较依据", html("fitnessRunDetail").includes("秒/公里") &&
+      html("fitnessEvidence").includes("data-evidence-run="));
+  }
 
-  const setYear = (y) => {
-    const b = makeEl("y"); b.dataset = { year: y };
-    run("year " + y, () => fire("yearSeg", "click", byData(b)));
-  };
-  const showTab = (t) => {
-    const b = makeEl("t"); b.dataset = { tab: t };
-    run("tab " + t, () => fire("tabs", "click", byData(b)));
-  };
+  click(els.modeSwitch, "[data-view-mode]", b => b.getAttribute("data-view-mode") === "week");
+  ok("周复盘没有显示", !els.weekView.hidden && els.afterView.hidden);
+  ok("最近五周列表缺失",
+    (html("weekList").match(/data-week-key=/g) || []).length === 5);
+  const current = weeks[weeks.length - 1];
+  const previous = weeks[weeks.length - 2];
+  ok("周复盘数值与预计算不一致",
+    html("weekDetail").includes(current.km.toFixed(1) + " km"));
+  ok("周复盘场次不可追溯",
+    (html("weekDetail").match(/data-week-run=/g) || []).length ===
+    current.ids.length + previous.ids.length);
+  if (current.ids.length) {
+    click(els.weekDetail, "[data-week-run]",
+      b => b.getAttribute("data-week-run") === String(current.ids[0]));
+    ok("周复盘无法打开单场", !els.historyView.hidden &&
+      html("historyDetail").includes("segment-table"));
+  }
 
-  ["2026", "2025", "all"].forEach(y => {
-    setYear(y);
-    ["overview", "daily", "gait", "single", "compare", "table"].forEach(showTab);
+  click(els.modeSwitch, "[data-view-mode]", b => b.getAttribute("data-view-mode") === "history");
+  const earliest = runs[0];
+  click(els.historyList, "[data-history-run]",
+    b => b.getAttribute("data-history-run") === String(earliest.id));
+  ok("历史单场没有显示", html("historyDetail").includes(earliest.date));
+  els.historyMonth.value = earliest.date.slice(0, 7);
+  els.historyMonth.handlers.change[0].call(els.historyMonth);
+  const monthCount = runs.filter(r => r.date.slice(0, 7) === els.historyMonth.value).length;
+  ok("月份筛选没有生效",
+    (html("historyList").match(/data-history-run=/g) || []).length === monthCount);
+  els.latestOpenHistory.handlers.click[0]();
+  ok("最新一场入口没有打开最新记录",
+    html("historyDetail").includes(runs[runs.length - 1].date));
+  click(els.modeSwitch, "[data-view-mode]", b => b.getAttribute("data-view-mode") === "after");
+  ok("跑后首页没有显示", !els.afterView.hidden && els.weekView.hidden && els.historyView.hidden);
+
+  const originalInsights = B.insights;
+  B.insights = { last: originalInsights.last,
+    recent28: { n: 1, km: 5, longestKm: 5 }, previous28: { n: 0, km: 0 },
+    delta28: {}, paired: [], periodEnough: false };
+  run("少样本页面重绘", () => vm.runInContext(
+    fs.readFileSync(path.join(ROOT, "app.js"), "utf8"), ctx));
+  ok("少样本仍在判断变化", text("recentBasis").includes("各至少 3 场") &&
+    text("recentChange") === "先看这段时间实际跑过的记录。");
+  B.insights = originalInsights;
+
+  ["beforeView", "extraTrends", "trendSection", "timelineChart", "planKmRange",
+    "scopeChip", "foot"].forEach(id => {
+    ok("已删区域仍在页面：" + id, !markup.includes('id="' + id + '"'));
   });
-
-  // --- 日历：每一个有记录的日子都点一遍，再抽查休息日与超范围日期
-  setYear("2026");
-  showTab("daily");
-  const gridHtml = els.calGrid.innerHTML;
-  const uniqDays = Array.from(new Set(D.runs.map(r => r.date))).sort();
-
-  uniqDays.forEach(d => {
-    const b = makeEl("d"); b.dataset = { day: d };
-    run("day " + d, () => fire("calGrid", "click", byData(b)));
-    if (!els.dayKpis.innerHTML) errors.push("有记录的日子没有渲染 KPI: " + d);
-    if (els.dayNotes.innerHTML.indexOf("强度结构") < 0) errors.push("有记录的日子缺强度结构: " + d);
+  ["charts.js", "plan-ui.js"].forEach(file => {
+    ok("页面仍加载旧脚本：" + file, !markup.includes('src="' + file + '"'));
   });
-  ["2026-09-16", "2026-09-21"].forEach(d => {          // 已知的休息日
-    const b = makeEl("d"); b.dataset = { day: d };
-    run("rest " + d, () => fire("calGrid", "click", byData(b)));
-    if (els.dayNotes.innerHTML.indexOf("休息日") < 0) errors.push("休息日说明缺失: " + d);
-    if (els.dayKpis.innerHTML) errors.push("休息日不该有 KPI: " + d);
+  ok("重复说明仍在页面", !markup.includes("mode-note"));
+  ok("跑前或趋势样式残留", !css.includes(".plan-") && !css.includes(".extra-trends") &&
+    !css.includes(".timeline-chart"));
+  ["toolrail", "trRefresh", "trLogin", "trCleanup", "trProgress",
+    "trModal", "trDegrade"].forEach(id => {
+    ok("工具入口缺失：" + id, markup.includes('id="' + id + '"'));
   });
-  run("pre-range", () => {
-    const b = makeEl("d"); b.dataset = { day: "2000-01-01" };
-    fire("calGrid", "click", byData(b));
-    if (els.dayNotes.innerHTML.indexOf("数据范围") < 0) errors.push("早于数据范围的提示缺失");
-  });
+  run("load toolrail.js", () => vm.runInContext(
+    fs.readFileSync(path.join(ROOT, "toolrail.js"), "utf8"), ctx));
+  ok("静态直开时提示不该自动弹出", els.trDegrade.dataset.open === "false");
+  ok("静态直开时工具按钮应能解释原因", els.trRefresh.disabled === false &&
+    els.trRefresh.getAttribute("aria-disabled") === "true");
+  if (els.trHot.handlers.click && els.trRefresh.handlers.click) {
+    els.trHot.handlers.click[0]();
+    ok("边缘入口不能打开工具", els.toolrail.dataset.open === "true" &&
+      els.trHot.getAttribute("aria-expanded") === "true");
+    els.trRefresh.handlers.click[0]();
+    ok("离线操作没有给出说明", els.trDegrade.dataset.open === "true");
+  }
+  ok("清理没有先预演",
+    fs.readFileSync(path.join(ROOT, "toolrail.js"), "utf8").includes("/cleanup/preview"));
 
-  // --- 月度对比：所有月份两两组合
-  const months = Array.from(new Set(D.runs.map(r => r.month))).sort();
-  let pairs = 0;
-  months.forEach(a => months.forEach(b => {
-    els.cmpMonth.value = a; els.cmpBase.value = b;
-    run("cmp " + a + "/" + b, () => fire("cmpMonth", "change", {}));
-    els.cmpBase.value = b;
-    run("cmpBase " + b, () => fire("cmpBase", "change", {}));
-    pairs++;
-  }));
-  els.cmpMonth.value = months[months.length - 1];
-  run("cmp same", () => fire("cmpMonth", "change", {}));
-  const sameGuard = els.mCmpNotes.innerHTML.indexOf("基准月与本期相同") >= 0;
-  if (!sameGuard) errors.push("选了同一个月的提示缺失");
+  /* 工具轨的失败态必须能**自己走出去**。2026-09-27 多弗朗报的「侧边栏三个按钮
+     坏了、用不了」根因就是这个：err 态永久粘住 —— 一次失败之后按钮永远停在那句
+     文案上，点几次、等多久都一样，唯一的自救是刷新页面（而没人会想到）。
+     这条断言把保鲜期钉住：谁把 TTL 改回无限（= 永久粘住），这里就会红。 */
+  const rail = ctx.window.__TOOLRAIL__;
+  rail.setBtn('login', 'err', '没完成（1）');
+  ok("失败提示在保鲜期内不被轮询冲掉", rail.isAlert('login') === true);
+  ok("失败提示有保鲜期，不会永久粘住", rail.alertTTL > 0 && rail.alertTTL <= 300000);
+  rail.setBtn('login', 'idle', '登录小米账号');
+  ok("回到 idle 之后不再算告警", rail.isAlert('login') === false);
 
-  // --- 对比页子页签：两个子页切换（月度 / 跨年与赛季）
-  run("cmp subtab season", () => {
-    const b = makeEl("sb"); b.dataset = { sub: "season" };
-    fire("cmpSubTabs", "click", byData(b));
-    if (!els["sub-season"].classList.contains("on")) errors.push("子页 season 没被点亮");
-    if (els["sub-month"].classList.contains("on")) errors.push("子页 month 没被熄灭");
-  });
-  run("cmp subtab month", () => {
-    const b = makeEl("sb2"); b.dataset = { sub: "month" };
-    fire("cmpSubTabs", "click", byData(b));
-    if (!els["sub-month"].classList.contains("on")) errors.push("子页 month 没被切回");
-  });
-
-  // --- 单次复盘：每一场都过一遍
-  showTab("single");
-  D.runs.forEach(r => {
-    els.runPick.value = String(r.id);
-    run("single " + r.id, () => fire("runPick", "change", {}));
-  });
-
-  // --- 总览建议条
-  showTab("overview");
-  if (els.ovAdvice.innerHTML.indexOf("日视图") < 0) errors.push("总览的今日建议条没渲染");
-  run("advice click", () => fire("ovAdvice", "click", {}));
-
-  // --- 日视图：今日建议大卡 + 依据列表
-  showTab("daily");
-  if (els.advCard.innerHTML.indexOf("class=\"advcard") < 0) errors.push("日视图的今日建议大卡没渲染");
-  const advFacts = (els.advFacts.innerHTML.match(/class="fact"/g) || []).length;
-  if (advFacts < 3) errors.push("日视图的依据列表过于单薄（" + advFacts + " 行）");
-
-  // --- 总览：负荷状态三块 + CTL/ATL/TSB 图
-  showTab("overview");
-  const loadStats = (els.loadStat.innerHTML.match(/class="stat/g) || []).length;
-  if (loadStats < 3) errors.push("训练负荷状态块缺失（" + loadStats + " 块）");
-
-  // --- 跑姿：体检表
-  showTab("gait");
-  const gaitRows = (els.gaitCheck.innerHTML.match(/<tr>/g) || []).length;
-  if (gaitRows < 4) errors.push("跑姿体检表行数不足（" + gaitRows + " 行）");
-
-  const report = {
-    errors,
-    runs: D.runs.length,
-    days: uniqDays.length,
-    calendarCells: (gridHtml.match(/<button/g) || []).length,
-    monthPairs: pairs,
-    sameMonthGuard: sameGuard,
-    adviceFacts: advFacts,
-    loadStats: loadStats,
-    gaitRows: gaitRows,
-    charts: chartCfgs.length,
-    emptyCharts: chartCfgs.filter(c => (c.data.datasets || []).every(d => !d.data.length)).length
-  };
-  return report;
+  return { errors, runs: runs.length, weeks: weeks.length,
+    metricsKB: Math.round(JSON.stringify(M).length / 1024) };
 }
 
 const report = main();
-
-// ------------------------------------------------------------------ 可选：真实浏览器
-async function browserPass(report) {
-  let pw;
-  try { pw = require("playwright-core"); } catch (e) {
-    report.browser = "skipped (找不到 playwright-core，设 NODE_PATH 指向含它的 node_modules)";
-    return;
-  }
-  // 注意：require("playwright-core") 返回整个模块，浏览器类型在 .chromium 上。
-  // 必须保留 this（chromium.launch(...)），把 launch 解构出来单独调用会丢 this，
-  // 报 "Cannot read properties of undefined (reading '_playwright')"（踩过）。
-  const chromium = pw.chromium;
-  if (!chromium || typeof chromium.launch !== "function") {
-    report.browser = "skipped (playwright-core 里没有可用的 chromium.launch)";
-    return;
-  }
-  const candidates = [
-    "C:/Program Files/Google/Chrome/Application/chrome.exe",
-    "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
-    "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
-  ];
-  const exe = candidates.find(p => fs.existsSync(p));
-  if (!exe) { report.browser = "skipped (没找到 Chrome / Edge)"; return; }
-
-  const browser = await chromium.launch({ executablePath: exe });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1024 } });
-  const consoleErrs = [];
-  page.on("pageerror", e => consoleErrs.push("PAGEERROR " + e.message));
-  page.on("console", m => { if (m.type() === "error") consoleErrs.push("CONSOLE " + m.text()); });
-
-  await page.goto("file:///" + path.join(ROOT, "index.html").replace(/\\/g, "/"));
-  await page.waitForTimeout(800);
-
-  const out = { consoleErrors: consoleErrs };
-
-  // 必须先切到日视图 —— 日历只在渲染日视图时才生成，
-  // 在总览页抽样会拿到空对象，守卫条件恒为假，检查静默失效（踩过）。
-  await page.click('button[data-tab="daily"]');
-  await page.waitForTimeout(500);
-
-  // 关键：抽查 computed style，桩看不见但会真出问题的地方
-  out.heatColors = await page.evaluate(() => {
-    const seen = {};
-    document.querySelectorAll("#calGrid button").forEach(b => {
-      const cls = Array.from(b.classList).find(c => /^heat[0-5]$/.test(c));
-      if (cls && seen[cls] === undefined) seen[cls] = getComputedStyle(b).backgroundColor;
-    });
-    return seen;
-  });
-  const heats = out.heatColors;
-  const found = Object.keys(heats);
-  if (found.length < 3) {
-    errors.push("热力色阶抽样只拿到 " + found.length + " 档（" + found.join(",") + "），检查本身失效了");
-  } else {
-    const distinct = new Set(found.map(k => heats[k]));
-    if (distinct.size !== found.length) {
-      errors.push("日历热力色阶有重复颜色（多半是 CSS 优先级被 .cal button 压过）：" + JSON.stringify(heats));
-    }
-  }
-
-  // 日历是否铺满、是否溢出、格子是否方的
-  out.calendar = await page.evaluate(() => {
-    const grid = document.getElementById("calGrid");
-    const wrap = grid.closest(".calwrap");
-    const c = grid.querySelector("button").getBoundingClientRect();
-    return {
-      cells: grid.querySelectorAll("button").length,
-      cell: Math.round(c.width),
-      square: Math.abs(c.width - c.height) < 1,
-      gridW: Math.round(grid.getBoundingClientRect().width),
-      wrapW: Math.round(wrap.clientWidth),
-      overflowing: wrap.scrollWidth > wrap.clientWidth
-    };
-  });
-  if (!out.calendar.square) errors.push("日历格子不是正方形");
-
-  // 各页签轮一遍
-  for (const t of ["overview", "daily", "gait", "single", "compare", "table"]) {
-    await page.click(`button[data-tab="${t}"]`);
-    await page.waitForTimeout(300);
-  }
-  await page.click('button[data-tab="overview"]');
-  await page.waitForTimeout(300);
-  out.adviceBar = await page.$eval("#ovAdvice", el => el.className + " :: " + el.innerText.replace(/\s+/g, " ").trim().slice(0, 120));
-
-  // 结构化建议卡与体检表：桩验证不了「真的有字」，这里抽查实际文本
-  out.loadStat = await page.$eval("#loadStat", el => el.innerText.replace(/\s+/g, " ").trim());
-  await page.click('button[data-tab="daily"]');
-  await page.waitForTimeout(300);
-  out.advCard = await page.$eval("#advCard", el => el.innerText.replace(/\s+/g, " ").trim().slice(0, 80));
-  out.advFacts = await page.$eval("#advFacts", el => el.innerText.replace(/\s+/g, " ").trim().slice(0, 80));
-  await page.click('button[data-tab="gait"]');
-  await page.waitForTimeout(300);
-  out.gaitCheck = await page.$eval("#gaitCheck", el => el.innerText.replace(/\s+/g, " ").trim().slice(0, 120));
-  const gib = await page.$eval("#gaitCheck", el => el.getBoundingClientRect().width);
-  if (!out.gaitCheck) errors.push("浏览器里跑姿体检表是空的");
-  if (gib < 200) errors.push("浏览器里跑姿体检表宽度异常：" + Math.round(gib));
-
-  await browser.close();
-  report.browser = out;
+if (wantBrowser) {
+  report.browser = "宽窄屏、静态直开与工具轨行为仍需在真实页面目视核验。";
 }
-
-(async () => {
-  if (wantBrowser) await browserPass(report);
-  console.log(JSON.stringify(report, null, 2));
-  if (errors.length) { console.error("\n失败 " + errors.length + " 项"); process.exit(1); }
-  console.log("\nALL_PASS");
-})();
+console.log(JSON.stringify(report, null, 2));
+if (errors.length) process.exit(1);
+console.log("ALL_PASS");

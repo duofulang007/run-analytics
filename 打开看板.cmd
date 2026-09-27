@@ -1,26 +1,42 @@
 @echo off
 rem ---------------------------------------------------------------------------
-rem run-analytics dashboard launcher (minimal shell).
+rem run-analytics dashboard launcher (dashboard with the built-in tool rail).
 rem
 rem ASCII-only on purpose: cmd.exe reads this file with the OEM codepage and any
 rem non-ASCII byte would garble (same rule as the other .cmd files here).
 rem
-rem Why a local http server at all, when shell\minimal.html opens fine by itself:
-rem   file:// 下 iframe 是"不透明源"，外壳碰不到看板内部，禁选中 / 隐藏编辑类元素
-rem   这类"像 App"的设置就注入不进去。http://127.0.0.1 下是同源，才能注入。
-rem   只想看数据的话，直接双击 shell\minimal.html 就够了（秒开、无进程）。
+rem What this starts:
+rem   tools\serve.py -- one local process that both serves the dashboard AND
+rem   exposes the import-pipeline API (/api/status, /api/refresh, /api/login,
+rem   /api/cleanup, /api/versions, /api/rollback).
 rem
-rem This window IS the server: keep it open while viewing, close it to stop.
-rem Nothing is exposed to the network (--bind 127.0.0.1).
+rem   2026-09-27: serve.py now does three things this .cmd used to do:
+rem     * picks its own free port (8917+, occupied -> next)  -- no netstat loop
+rem     * prints the banner (real URL + token)               -- one source only
+rem     * opens the browser once the port is BOUND           -- see --open-browser
+rem   The old PowerShell "poll the URL every 250ms then Start-Process" step is
+rem   gone. It cost a 1-3s cold start AND could open a SECOND tab, because the
+rem   apex-console launcher opened the dashboard as well.
+rem
+rem Two launch paths share this one file (the launcher is the single truth):
+rem   * double-click HERE        -> console window stays open, close it to stop.
+rem   * apex-console "run"       -> same file, started with CREATE_NO_WINDOW, so
+rem     nothing black ever flashes on screen; stop/restart via the console button.
+rem
+rem Pure static path stays available: double-click index.html (no process at all;
+rem the tool rail degrades to grey buttons, the dashboard itself is unaffected).
+rem
+rem Nothing is exposed to the network (bound to 127.0.0.1 + a random per-run
+rem token injected into the page).
 rem ---------------------------------------------------------------------------
 setlocal
 set "ROOT=%~dp0"
-set "PAGE=shell/minimal.html"
-set "PORT=8917"
+set "ENTRY=tools\serve.py"
 
-if not exist "%ROOT%%PAGE%" goto nopage
+if not exist "%ROOT%%ENTRY%" goto noentry
 
 rem --- pick a python (same candidates as the other launchers here) -----------
+rem The import pipeline needs playwright, which lives in the apex-console venv.
 set "PY="
 set "CAND=%ROOT%..\apex-console\backend\.venv\Scripts\python.exe"
 if exist "%CAND%" set "PY=%CAND%"
@@ -30,48 +46,33 @@ if defined PY goto havepy
 goto nopython
 
 :havepy
-rem --- find a free port (8917..8960) -----------------------------------------
-:scan
-if %PORT% GTR 8960 goto noport
-netstat -an | findstr /c:":%PORT% " | findstr /i "LISTENING" >nul
-if not errorlevel 1 (
-  set /a PORT+=1
-  goto scan
-)
+rem --- leave a trail in %TEMP%\run-analytics\ so a launcher can tell what happened ---
+rem The dashboard's own launcher (apex-console runner-lab) starts THIS file detached and
+rem only knows the pid/port it scraped from the bridge itself. When something goes wrong
+rem later, "who started it, with which interpreter" must be answerable without guessing.
+rem The port/URL/token are printed by serve.py below, not here.
+set "RUNDIR=%TEMP%\run-analytics"
+if not exist "%RUNDIR%" mkdir "%RUNDIR%"
+> "%RUNDIR%\launcher.log" echo started %DATE% %TIME% pid=%RANDOM%
+>>"%RUNDIR%\launcher.log" echo   root=%ROOT%
+>>"%RUNDIR%\launcher.log" echo   py=%PY%
 
-set "URL=http://127.0.0.1:%PORT%/%PAGE%"
-
-echo.
-echo   run-analytics  -  dashboard
-echo   -----------------------------
-echo   URL   : %URL%
-echo   Root  : %ROOT%
-echo   Keep this window open while viewing. Close it to stop the server.
-echo.
-
-rem --- open the browser once the port answers (hidden, no focus stealing) ----
-start /min "" powershell -NoProfile -WindowStyle Hidden -Command ^
-  "Start-Sleep -Milliseconds 1000; Start-Process '%URL%'"
-
-"%PY%" -m http.server %PORT% --bind 127.0.0.1 --directory "%ROOT%."
+rem --open-browser: the bridge opens the dashboard itself, right after its port
+rem is bound -- so the page is reachable the moment the browser asks for it.
+"%PY%" "%ROOT%%ENTRY%" --open-browser
 goto end
 
 :nopython
 echo [ERROR] No python.exe found.
 echo         Tried: ..\apex-console\backend\.venv\Scripts\python.exe and PATH.
-echo         Workaround: double-click shell\minimal.html directly
-echo         (the dashboard shows fine; only the read-only injection is skipped).
+echo         Workaround: double-click index.html
+echo         (the dashboard shows fine; only the tool rail is unavailable).
 pause
 exit /b 1
 
-:nopage
-echo [ERROR] %PAGE% was not found under:
+:noentry
+echo [ERROR] %ENTRY% was not found under:
 echo         %ROOT%
-pause
-exit /b 1
-
-:noport
-echo [ERROR] No free port in 8917-8960.
 pause
 exit /b 1
 

@@ -486,6 +486,20 @@ def main(argv=None) -> int:
         "months": months,
     }
 
+    # metrics 段必须在这里一起算：前端不再自己算指标（口径只此一份）。
+    # 漏了这一步，导入完的 data.js 会没有 metrics，页面只剩"先跑 metrics.py"的提示。
+    # 算指标失败不应该让整个导入失败 —— 数据本身已经写进去了，降级为警告即可。
+    say("")
+    try:
+        # 显式把 tools/ 加进 sys.path：以 `python tools/import_zip.py` 直接跑时
+        # sys.path[0] 已经是它，但以 `python -m tools.import_zip` 跑时不是（踩过）。
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import metrics as _metrics
+        payload["metrics"] = _metrics.build(runs)
+        say("已算好指标与 %d 条发现" % len(payload["metrics"]["findings"]))
+    except Exception as exc:                       # pragma: no cover
+        say("警告：指标计算失败（%s），看板会提示先跑 python tools/metrics.py" % exc)
+
     out_path = Path(args.out)
     if out_path.is_file():
         PREV_OUT.write_text(out_path.read_text(encoding="utf-8"), encoding="utf-8")

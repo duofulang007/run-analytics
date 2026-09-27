@@ -3,244 +3,224 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>跑步数据仪表盘</title>
+<title>跑步复盘</title>
+<!-- 空 favicon：不写这行浏览器会去要 /favicon.ico，控制台多一条 404 噪音 -->
+<link rel="icon" href="data:,">
+<!--
+  本地跑步复盘：
+
+    跑后：最新一场 + 28 天事实与一条有依据的变化
+    体能变化：长期训练负荷估算 + 每场可比表现
+    周复盘：最近五周及其原始场次
+    历史：全部记录与单场详情
+
+  汇总数据由 tools/metrics.py 预计算写进 data.js；这里负责交互和展示。
+-->
 <link rel="stylesheet" href="styles.css">
+<!-- 本地服务（tools/serve.py）会把下面这行替成 window.__BRIDGE__ 注入脚本。
+     不替的时候（file:// 直开）工具轨自动降级，看板本体照常显示。 -->
+<!--BRIDGE_BOOTSTRAP-->
 </head>
 <body>
 
-<header class="topbar">
-  <div class="brand">
+<header class="bar">
+  <div class="bar-l">
     <span class="logo" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" stroke-linejoin="round">
         <path d="M13 3l-3 7h5l-3 7"/><path d="M3 20h18"/>
       </svg>
     </span>
-    <div>
-      <h1>跑步数据仪表盘</h1>
-      <p class="sub">数据源：小米运动健康官方导出 · 仅户外跑步 · <span id="genAt"></span></p>
+    <div class="bar-t">
+      <h1>跑步复盘</h1>
+      <p class="sub" id="barSub">正在读取…</p>
     </div>
   </div>
-  <div class="filters">
-    <span class="flabel">时间范围</span>
-    <div class="seg" id="yearSeg">
-      <button type="button" data-year="2026" class="on">2026</button>
-      <button type="button" data-year="2025">2025</button>
-      <button type="button" data-year="all">全部</button>
-    </div>
+  <div class="bar-r">
+    <span class="chip" id="freshChip"></span>
   </div>
 </header>
 
-<nav class="tabs" id="tabs">
-  <button type="button" data-tab="overview" class="on">总览</button>
-  <button type="button" data-tab="daily">日视图</button>
-  <button type="button" data-tab="gait">跑姿分析</button>
-  <button type="button" data-tab="single">单次复盘</button>
-  <button type="button" data-tab="compare">对比分析</button>
-  <button type="button" data-tab="table">全部记录</button>
-</nav>
+<main class="dashboard">
+  <nav class="modebar" id="modeSwitch" aria-label="跑步复盘页面">
+    <div class="mode-tabs" role="tablist">
+      <button type="button" data-view-mode="after" aria-controls="afterView" role="tab" aria-selected="true">跑后 · 最新一场</button>
+      <button type="button" data-view-mode="fitness" aria-controls="fitnessView" role="tab" aria-selected="false">体能变化</button>
+      <button type="button" data-view-mode="week" aria-controls="weekView" role="tab" aria-selected="false">周复盘</button>
+      <button type="button" data-view-mode="history" aria-controls="historyView" role="tab" aria-selected="false">历史 · 全部记录</button>
+    </div>
+  </nav>
 
-<main>
+  <section class="hero-grid" id="afterView" role="tabpanel" aria-label="最新一场分析和近期变化">
+    <article class="hero-card latest-card">
+      <header class="hero-heading">
+        <div><p class="eyebrow" id="latestKicker">最新一场</p><h2 id="latestVerdict">正在读取最新一场…</h2></div>
+        <span class="latest-date" id="latestDate"></span>
+      </header>
+      <div class="latest-primary">
+        <strong id="latestDistance">—</strong><span class="distance-unit">km</span>
+        <span class="latest-fact">用时 <b id="latestTime">—</b></span>
+        <span class="latest-fact">配速 <b id="latestPace">—</b></span>
+        <span class="latest-fact">均心 <b id="latestHr">—</b></span>
+      </div>
+      <p class="latest-explanation" id="latestExplanation"></p>
+      <div class="latest-comparison" aria-label="最新一场与相似跑步的对比">
+        <div><span>同类跑配速</span><strong id="paceDelta">—</strong></div>
+        <div><span>同类跑心率</span><strong id="hrDelta">—</strong></div>
+        <div><span>高强度时间</span><strong id="highDelta">—</strong></div>
+      </div>
+      <div id="latestEvidence"></div>
+      <button class="history-link" id="latestOpenHistory" type="button">查看这场的完整记录</button>
+    </article>
 
-  <section class="panel on" id="panel-overview">
-    <div class="advbar" id="ovAdvice"></div>
-    <div class="kpis" id="kpis"></div>
-    <div class="grid">
-      <div class="card wide">
-        <div class="chd"><h2>每次跑步：距离与平均配速</h2><p>柱状为距离，曲线为平均配速（纵轴已反向，越靠上越快）</p></div>
-        <div class="cbox h300"><canvas id="cDistPace"></canvas></div>
+    <section class="hero-card insights-card" aria-labelledby="insightTitle">
+      <header class="hero-heading">
+        <div><p class="eyebrow">最近 28 天</p><h2 id="insightTitle">这段时间跑了什么</h2></div>
+        <span class="latest-date" id="recentAsOf"></span>
+      </header>
+      <div class="recent-facts">
+        <div><span>跑步次数</span><strong id="recentSessions">—</strong></div>
+        <div><span>累计跑量</span><strong id="recentKm">—</strong></div>
+        <div><span>最长一场</span><strong id="recentLongest">—</strong></div>
       </div>
-      <div class="card">
-        <div class="chd"><h2>月度跑量</h2><p>柱状为当月总里程</p></div>
-        <div class="cbox h260"><canvas id="cMonth"></canvas></div>
-      </div>
-      <div class="card">
-        <div class="chd"><h2>心率区间时长</h2><p>全部选中场次的五档分布</p></div>
-        <div class="cbox h260"><canvas id="cZones"></canvas></div>
-      </div>
-      <div class="card wide">
-        <div class="chd"><h2>训练负荷与状态</h2><p id="cLoadSub">CTL 体能（涨得慢）· ATL 疲劳（来得快、去得也快）· TSB 状态 = CTL − ATL</p></div>
-        <div class="stat3" id="loadStat"></div>
-        <div class="cbox h300"><canvas id="cLoad"></canvas></div>
-        <p class="hint" id="loadHint"></p>
-      </div>
+      <p class="recent-change" id="recentChange"></p>
+      <p class="recent-basis" id="recentBasis"></p>
+      <div id="recentEvidence"></div>
+      <button class="history-link" id="openWeekReview" type="button">按周回看这段时间</button>
+    </section>
+  </section>
+
+  <section class="fitness-view" id="fitnessView" role="tabpanel" aria-label="训练基础估算和逐场表现" hidden>
+    <header class="history-heading">
+      <div><p class="eyebrow">训练负荷与实际表现</p><h2>体能变化</h2><p class="history-count" id="fitnessScope"></p></div>
+    </header>
+    <div class="fitness-summary" id="fitnessSummary"></div>
+    <p class="fitness-state" id="fitnessState"></p>
+    <div class="fitness-chart-wrap">
+      <div class="fitness-legend"><span class="base-key">训练基础估算 · 42 天</span><span class="recent-key">近期负荷 · 7 天</span></div>
+      <div id="fitnessChart" role="img" aria-label="最近 120 天训练基础和近期负荷变化"></div>
+    </div>
+    <p class="fitness-method">两条线由设备训练负荷按天平滑计算，休息日按零计入；42/7 天窗口尚未按个人跑测标定。它们是训练量的参考，不是实测体能、疲劳或伤病风险。每场的进退另用距离、强度、心率相近的跑步核对。</p>
+    <div class="fitness-run-layout">
+      <div><h3>每场表现</h3><p class="history-count">点选一场，查看比较依据</p><div class="fitness-run-list" id="fitnessRunList"></div></div>
+      <article class="fitness-run-detail" aria-live="polite"><div id="fitnessRunDetail"></div><div id="fitnessEvidence"></div></article>
     </div>
   </section>
 
-  <section class="panel" id="panel-daily">
-    <div id="advCard"></div>
-    <div class="facts" id="advFacts"></div>
-    <div class="card">
-      <div class="chd"><h2>训练日历</h2><p id="calSub"></p></div>
-      <div class="calwrap">
-        <div class="calflex">
-          <div class="caldow"><span>一</span><span></span><span>三</span><span></span><span>五</span><span></span><span>日</span></div>
-          <div class="cal" id="calGrid"></div>
-        </div>
-      </div>
-      <div class="callegend" id="calLegend"></div>
-    </div>
-    <div class="blockhd">
-      <h2 id="dayTitle"></h2>
-      <span class="hint" id="dayHint"></span>
-    </div>
-    <div class="kpis day" id="dayKpis"></div>
-    <div class="facts" id="dayNotes"></div>
-  </section>
-
-  <section class="panel" id="panel-gait">
-    <div class="card wide">
-      <div class="chd"><h2>跑姿体检</h2><p id="gaitCheckSub"></p></div>
-      <table class="tbl gaitcheck" id="gaitCheck"></table>
-    </div>
-    <div class="grid">
-      <div class="card">
-        <div class="chd"><h2>触地时间</h2><p>越低越好，浅色带为当场最小至最大</p></div>
-        <div class="cbox h260"><canvas id="cTd"></canvas></div>
-      </div>
-      <div class="card">
-        <div class="chd"><h2>垂直振幅</h2><p>越低越省力，浅色带为当场最小至最大</p></div>
-        <div class="cbox h260"><canvas id="cVa"></canvas></div>
-      </div>
-      <div class="card">
-        <div class="chd"><h2>垂直步幅比</h2><p>垂直振幅占步幅的比例，越低越好</p></div>
-        <div class="cbox h260"><canvas id="cVsr"></canvas></div>
-      </div>
-      <div class="card">
-        <div class="chd"><h2>步频与步幅</h2><p>双轴对照</p></div>
-        <div class="cbox h260"><canvas id="cCadStride"></canvas></div>
-      </div>
-      <div class="card">
-        <div class="chd"><h2>配速与触地时间</h2><p>看跑得越慢是否触地越久</p></div>
-        <div class="cbox h260"><canvas id="cScPaceTd"></canvas></div>
-      </div>
-      <div class="card">
-        <div class="chd"><h2>步频与垂直振幅</h2><p>看步频提高是否压低弹跳</p></div>
-        <div class="cbox h260"><canvas id="cScCadVa"></canvas></div>
-      </div>
-    </div>
-    <div class="facts" id="gaitNotes"></div>
-  </section>
-
-  <section class="panel" id="panel-single">
-    <div class="pickbar">
-      <label for="runPick">选择场次</label>
-      <select id="runPick"></select>
-      <div class="picknav">
-        <button type="button" id="btnPrev">上一场</button>
-        <button type="button" id="btnNext">下一场</button>
-      </div>
-    </div>
-    <div class="kpis" id="kpisSingle"></div>
-    <div class="facts" id="singleNotes"></div>
-    <div class="grid">
-      <div class="card wide">
-        <div class="chd"><h2>逐分钟曲线</h2><p>左轴配速（反向），右轴心率与步频</p></div>
-        <div class="cbox h320"><canvas id="cSingle"></canvas></div>
-      </div>
-      <div class="card">
-        <div class="chd"><h2>该场配速分布</h2><p>每分钟配速直方图</p></div>
-        <div class="cbox h260"><canvas id="cHist"></canvas></div>
-      </div>
-      <div class="card">
-        <div class="chd"><h2>半程漂移</h2><p>前半程与后半程对比</p></div>
-        <div class="cbox h260"><canvas id="cDrift"></canvas></div>
-      </div>
+  <section class="week-view" id="weekView" role="tabpanel" aria-label="最近五周跑步复盘" hidden>
+    <header class="history-heading">
+      <div><p class="eyebrow">每周回看</p><h2>最近几周怎么跑的</h2><p class="history-count" id="weekScope"></p></div>
+    </header>
+    <div class="week-layout">
+      <div class="week-list" id="weekList" aria-label="最近五周列表"></div>
+      <article class="week-detail" id="weekDetail" aria-live="polite"></article>
     </div>
   </section>
 
-  <section class="panel" id="panel-compare">
-    <!-- 子页签：对比内容太多，硬塞一页会又挤又糊；拆成两个子页各自一屏，
-         每屏不滚动、图表足够大。切换逻辑见 app.js 的 showCmpSub。 -->
-    <div class="seg subtabs" id="cmpSubTabs">
-      <button type="button" data-sub="month" class="on">月度对比</button>
-      <button type="button" data-sub="season">跨年与赛季</button>
-      <button type="button" data-sub="detail">明细表</button>
-    </div>
-
-    <div class="sub on" id="sub-month">
-      <div class="blockhd">
-        <h2>月度对比</h2>
-        <span class="hint" id="mCmpHint"></span>
-        <div class="cmp-pick">
-          <label for="cmpBase">基准月</label>
-          <select id="cmpBase"></select>
-          <label for="cmpMonth">本期</label>
-          <select id="cmpMonth"></select>
-        </div>
-      </div>
-      <div class="notes" id="mCmpNotes"></div>
-      <div class="grid three">
-        <div class="card">
-          <div class="chd"><h2>配速与心率关系</h2><p id="mScSub">同样配速下心率更低，代表有氧能力更强</p></div>
-          <div class="cbox h200"><canvas id="cMonthSc"></canvas></div>
-        </div>
-        <div class="card">
-          <div class="chd"><h2>同距离档位心率</h2><p id="mBandSub">把跑量锁在同一档位后再比心率</p></div>
-          <div class="cbox h200"><canvas id="cMonthBand"></canvas></div>
-        </div>
-        <div class="card">
-          <div class="chd"><h2>本期与基准月关键指标</h2><p id="mKpiSub">按月份平均值对比</p></div>
-          <div class="cbox h200"><canvas id="cMonthKpi"></canvas></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="sub" id="sub-season">
-      <div class="blockhd"><h2>跨年与赛季对比</h2><span class="hint">2025 全年 vs 2026 全年，以及 2026 赛季内同距离对比</span></div>
-      <div class="notes" id="cmpNotes"></div>
-      <div class="grid two">
-        <div class="card">
-          <div class="chd"><h2>2025 与 2026 关键指标</h2><p>跑量差距大，均值只作参考</p></div>
-          <div class="cbox h160"><canvas id="cYearCmp"></canvas></div>
-        </div>
-        <div class="card">
-          <div class="chd"><h2>2026 赛季内对比</h2><p>7 月及以前 vs 8 月以后，已控制跑量</p></div>
-          <div class="cbox h160"><canvas id="cSeasonCmp"></canvas></div>
-        </div>
-        <div class="card">
-          <div class="chd"><h2>同距离档位对比</h2><p>相近里程场次的平均表现</p></div>
-          <div class="cbox h160"><canvas id="cBucket"></canvas></div>
-        </div>
-        <div class="card">
-          <div class="chd"><h2>周训练量</h2><p>柱状为周里程，曲线为周平均配速</p></div>
-          <div class="cbox h160"><canvas id="cWeek"></canvas></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="sub" id="sub-detail">
-      <div class="blockhd"><h2>明细表</h2><span class="hint">两张表都是完整数据；图表子页里的结论以它们为依据</span></div>
-      <div class="grid two">
-        <div class="card">
-          <div class="chd"><h2>月度对比 · 逐指标</h2><p id="mCmpHint2"></p></div>
-          <div class="tablewrap" style="max-height:520px">
-            <table class="tbl" id="mCmpTbl"></table>
-          </div>
-        </div>
-        <div class="card">
-          <div class="chd"><h2>跨年对比 · 逐指标</h2><p>2025 全年 vs 2026 全年</p></div>
-          <div class="tablewrap" style="max-height:520px">
-            <table class="tbl" id="cmpTbl"></table>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="panel" id="panel-table">
-    <div class="tablebar">
-      <input type="text" id="search" placeholder="按日期筛选，例如 2026-09">
-      <span class="hint" id="rowHint"></span>
-    </div>
-    <div class="tablewrap">
-      <table class="tbl sortable" id="runTbl"></table>
+  <section class="history-view" id="historyView" role="tabpanel" aria-label="全部跑步历史" hidden>
+    <header class="history-heading">
+      <div><p class="eyebrow">完整跑步日志</p><h2>每一场都能找回来</h2><p id="historyCount" class="history-count"></p></div>
+      <label for="historyMonth">按月份查找
+        <select id="historyMonth" aria-label="按月份查找跑步记录"></select>
+      </label>
+    </header>
+    <div class="history-layout">
+      <div class="history-list" id="historyList" aria-label="跑步记录列表"></div>
+      <article class="history-detail" id="historyDetail" aria-live="polite"></article>
     </div>
   </section>
 
 </main>
 
-<script src="vendor/chart.umd.min.js"></script>
+<!-- ==================================================== 悬浮工具轨（侧边）----
+  2026-09-26 多弗朗：把常用导入动作融进看板，做成 B 站那种右侧悬浮侧边。
+  常态只留边缘短线，鼠标靠右或点按展开；position:fixed 不随页面滚动。
+  这层只管理操作入口和刷新进度，不参与复盘内容渲染。
+
+  **降级**：file:// 直开时拿不到本地服务（window.__BRIDGE__ 不存在），
+  三个按钮变灰、点一下给提示。看板本体照常能看 ——
+  「双击 index.html 就能看」这条承诺不能被工具轨破坏。
+-->
+<aside class="toolrail" id="toolrail" data-degraded="false" data-open="false" aria-label="看板工具">
+  <button class="tr-hot" id="trHot" type="button" aria-label="展开看板工具" aria-controls="trStack" aria-expanded="false"></button>
+
+  <div class="tr-stack" id="trStack">
+    <!-- 刷新数据：从邮箱取包 → 导入看板。长任务，按钮转进度环 -->
+    <button class="tr-btn" id="trRefresh" type="button" data-state="idle" aria-label="刷新数据">
+      <span class="tr-ring" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
+      </span>
+      <span class="tr-ico" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.5 4v4.5H16"/>
+        </svg>
+      </span>
+      <span class="tr-tip" id="tipRefresh" aria-hidden="true">刷新数据</span>
+    </button>
+
+    <!-- 登录小米：唤起系统浏览器登录（到此为止，隐私中心自己走） -->
+    <button class="tr-btn" id="trLogin" type="button" data-state="idle" aria-label="登录小米账号">
+      <span class="tr-ring" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
+      </span>
+      <span class="tr-ico" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="8" r="3.6"/><path d="M5 19.5c0-3.4 3.1-6 7-6s7 2.6 7 6"/>
+        </svg>
+      </span>
+      <span class="tr-tip" id="tipLogin" aria-hidden="true">登录小米账号</span>
+    </button>
+
+    <!-- 清理下载包：删包和记录（保留 data.js）。先预演再二次确认 -->
+    <button class="tr-btn" id="trCleanup" type="button" data-state="idle" aria-label="清理下载包和记录">
+      <span class="tr-ico" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 7h16"/><path d="M10 4h4"/><path d="M6 7l1 13h10l1-13"/>
+          <path d="M10 11v5M14 11v5"/>
+        </svg>
+      </span>
+      <span class="tr-tip" id="tipCleanup" aria-hidden="true">清理下载包和记录</span>
+    </button>
+  </div>
+</aside>
+
+<!-- 刷新进度：非模态状态卡，不遮挡操作，也不显示虚假的百分比。 -->
+<section class="tr-progress" id="trProgress" data-open="false" aria-hidden="true" aria-live="polite" aria-atomic="true">
+  <div class="tr-progress-head">
+    <span class="tr-progress-dot" aria-hidden="true"></span>
+    <strong id="trProgressTitle">正在刷新数据</strong>
+    <time id="trProgressElapsed">00:00</time>
+  </div>
+  <div class="tr-progress-track" role="progressbar" aria-label="刷新数据进度"
+       aria-valuemin="0" aria-valuemax="100" aria-valuetext="正在处理">
+    <span class="tr-progress-fill"></span>
+  </div>
+  <p class="tr-progress-step" id="trProgressStep">正在连接邮箱，检查新的导出邮件</p>
+</section>
+
+<!-- ==================================================== 确认框 ---->
+<div class="tr-modal-scrim" id="trModalScrim"></div>
+<div class="tr-modal" id="trModal" data-open="false" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="trModalTitle">
+  <h3 class="tr-modal-title" id="trModalTitle"></h3>
+  <div class="tr-modal-body" id="trModalBody"></div>
+  <div class="tr-modal-foot">
+    <button class="tr-btn-t" id="trModalCancel" type="button">取消</button>
+    <button class="tr-btn-t tr-btn-danger" id="trModalOk" type="button">确认</button>
+  </div>
+</div>
+
+<!-- 降级提示条（file:// 直开时出现，不挡住看板） -->
+<div class="tr-degrade" id="trDegrade" data-open="false">
+  <span class="tr-degrade-text" id="trDegradeText"></span>
+  <button class="tr-degrade-copy" id="trDegradeCopy" type="button">复制命令</button>
+  <button class="tr-degrade-x" id="trDegradeX" type="button" aria-label="关闭">&times;</button>
+</div>
+
 <script src="data.js"></script>
 <script src="app.js"></script>
+<script src="toolrail.js"></script>
 </body>
 </html>

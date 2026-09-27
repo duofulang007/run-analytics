@@ -50,17 +50,20 @@ set "PYTHONIOENCODING=utf-8"
 echo Interpreter: %PY%
 echo.
 %PY% "%SCRIPT%" %*
+set "SCRIPT_EXIT=%ERRORLEVEL%"
+if /i "%RUN_ANALYTICS_NO_PAUSE%"=="1" exit /b %SCRIPT_EXIT%
 echo.
-echo Exit code: %ERRORLEVEL%
+echo Exit code: %SCRIPT_EXIT%
 echo.
 pause
-exit /b 0
+exit /b %SCRIPT_EXIT%
 
 :missing
 echo [ERROR] tools\xiaomi_login.py was not found:
 echo         %SCRIPT%
 echo Make sure this file still sits in the run-analytics project root.
 echo.
+if /i "%RUN_ANALYTICS_NO_PAUSE%"=="1" exit /b 1
 pause
 exit /b 1
 
@@ -69,5 +72,6 @@ echo [ERROR] No Python 3 found. Install Python 3 or add it to PATH.
 echo         playwright is required; the shared venv is:
 echo           ..\apex-console\backend\.venv\Scripts\python.exe
 echo.
+if /i "%RUN_ANALYTICS_NO_PAUSE%"=="1" exit /b 1
 pause
 exit /b 1
