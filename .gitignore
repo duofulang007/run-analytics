@@ -1,4 +1,4 @@
-# runner-lab 私有/生成物：健康数据与运行产物不进本仓库
+# run-analytics 私有/生成物：健康数据与运行产物不进本仓库
 # data.js 可通过导入一次小米导出包重建（双击「导入数据.cmd」）
 data.js
 data.prev.js
@@ -11,6 +11,10 @@ latest/
 # 邮箱凭证与已处理邮件记录。授权码是长期凭证，绝不能进仓库。
 # 内容：mail_config.json（邮箱地址 + IMAP 授权码）、mail_state.json（已处理邮件 UID）
 local/
+
+# 本地 AI 会话的草稿与记忆：属于工具产物，不是项目内容
+.workbuddy/
+.workbuddy-ai/
 
 # Python 缓存
 __pycache__/
