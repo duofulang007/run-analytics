@@ -27,16 +27,18 @@ import math
 import os
 from pathlib import Path
 import queue
-import re
-import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox
 
 # 清理功能在同目录的 cleanup.py 里（预演 / 真删分离，命令行也能单独跑）
+# 四个动作的业务实现都在 tasks.py —— 窗口和本地桥（serve.py）共用同一份，
+# 避免「同一件事两处各实现一遍，改一处忘一处」。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cleanup  # noqa: E402
+import tasks  # noqa: E402
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 # 自动链路：从邮箱取最新一封的密码 → 静默下载包 → 导入 → 弹通知
@@ -45,10 +47,9 @@ FETCH_SCRIPT = Path(__file__).resolve().parent / "fetch_from_mail.py"
 # 它是「从邮箱导入」的前置 —— 不在小米那边申请导出，就不会有导出邮件。
 # 两者**共用同一个浏览器 profile**（local/browser-profile），所以不能同时跑（见 _sync_buttons）。
 LOGIN_SCRIPT = Path(__file__).resolve().parent / "xiaomi_login.py"
-# 「打开历史看板」落在**零侵入的极简外壳**里（2026-09-24 多弗朗：推翻玻璃质感方案，
-# 改成不要装饰、直接铺满）。入口不变，只是终点从裸看板换成了壳；壳是纯静态的，
-# 双击即可，不需要起服务、不留常驻进程。裸看板只作为 shell/ 缺失时的兜底。
-SHELL = PROJECT_DIR / "shell" / "minimal.html"
+# 「打开历史看板」的落点是裸看板本体。独立外壳页（shell/ 下的极简 iframe 壳与更早的
+# 玻璃壳）已废弃删除：工具轨现在住在 index.html 自己身上（悬浮侧边），套壳只会多一层。
+# 这个窗口只管「导入链路」；日常看板走根目录的「打开看板.cmd」（起本地桥 → 工具轨激活）。
 DASHBOARD = PROJECT_DIR / "index.html"
 
 # ---------------------------------------------------------------- 设计令牌
@@ -103,20 +104,9 @@ TERM_R = 14                                                       # --r-inner:14
 def dashboard_meta() -> str:
     """摘取 data.js 的概况，给「历史看板」入口当副标题。
 
-    只正则摘字段，不解析整个 JSON：data.js ~157KB，摘 generated / 场次数 /
-    最大日期这三样足够。多弗朗时不时会点开看板，多数时候并不想走一遍导入 ——
-    这个入口就是给「只想看看」的日子用的。
+    实现在 `tasks.dashboard_meta()`（本地桥的工具轨也用同一句摘要，别各写一份）。
     """
-    data_file = PROJECT_DIR / "data.js"
-    if not data_file.is_file():
-        return ""
-    text = data_file.read_text(encoding="utf-8", errors="ignore")
-    dates = re.findall(r'"date"\s*:\s*"(\d{4}-\d{2}-\d{2})"', text)
-    if not dates:
-        return ""
-    runs = len(re.findall(r'"id"\s*:', text))
-    gen = re.search(r'"generated"\s*:\s*"([^"]+)"', text)
-    return f"共 {runs} 场 · 截至 {max(dates)}" + (f" · 生成于 {gen.group(1)}" if gen else "")
+    return tasks.dashboard_meta()
 
 
 # ---------------------------------------------------------------- 圆角控件
@@ -308,21 +298,18 @@ class ImportWindow:
         self.log.configure(state="disabled")
 
     def _open_dashboard(self) -> None:
-        """打开历史看板 —— 落在沉浸玻璃壳里。
+        """打开历史看板（裸看板本体，file:// 直开）。
 
-        壳是纯静态页面（iframe 套壳，看板三件套零改动），双击就能开，
-        所以这里不起服务、不留常驻进程 —— 也就不存在"服务被回收导致打不开"的老问题。
-        优先壳，老检出里没有 shell/ 时回落到裸看板，不至于点不开。
+        纯静态，双击即可，所以这里不起服务、不留常驻进程 —— 也就不存在
+        "服务被回收导致打不开"的老问题。代价是 file:// 下拿不到桥，
+        工具轨降级成灰按钮（刷新/登录/清理要点根目录的「打开看板.cmd」）。
         """
-        target = SHELL if SHELL.is_file() else DASHBOARD
-        if not target.is_file():
-            self._say("找不到看板文件：%s" % target, TERM_ERR)
+        if not DASHBOARD.is_file():
+            self._say("找不到看板文件：%s" % DASHBOARD, TERM_ERR)
             return
-        self._say("已打开历史看板：%s" % target.name, TERM_OK)
-        # 壳在 file:// 下拿不到帧内 DOM；"像 App"那一条（禁选中 / 隐藏编辑类元素）
-        # 走根目录的「打开看板.cmd」（本机 http，同源）。
-        self._say("要连看板内部的选中一起禁掉，双击根目录「打开看板.cmd」。", TERM_DIM)
-        os.startfile(str(target))  # type: ignore[attr-defined]
+        self._say("已打开历史看板：%s" % DASHBOARD.name, TERM_OK)
+        self._say("刷新/登录/清理要点根目录的「打开看板.cmd」（本机 http 才有桥）。", TERM_DIM)
+        os.startfile(str(DASHBOARD))  # type: ignore[attr-defined]
 
     # -------------------------------------------------- 邮箱自动导入
     def _start_mail_flow(self) -> None:
@@ -355,32 +342,26 @@ class ImportWindow:
         threading.Thread(target=self._run_mail_flow, daemon=True).start()
 
     def _run_mail_flow(self) -> None:
-        env = dict(os.environ)
-        env["PYTHONIOENCODING"] = "utf-8"
-        # 逐行读、当场投进日志窗：这条链路可能要在浏览器里登录、跑几分钟，
-        # 等它全跑完再一次性显示，用户看到的就是「卡住不动」。-u 关掉子进程缓冲。
-        proc = None
+        """跑邮箱导入。业务的启动参数在 `tasks.refresh()` 里（工具轨也用同一份）。
+
+        这里只负责「把它的输出一行行投进日志窗」：这条链路可能要在浏览器里登录、
+        跑几分钟，等它全跑完再一次性显示，用户看到的就是「卡住不动」。所以用 tasks
+        给的 Runner 流式读，而不是自己 Popen 一份。
+        """
+        runner = None
         try:
-            proc = subprocess.Popen(
-                [sys.executable, "-u", str(FETCH_SCRIPT), "--notify"],
-                cwd=str(PROJECT_DIR),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=env,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
-            )
-            for raw_line in proc.stdout or []:
-                self.lines.put(raw_line.rstrip("\n"))
-            self.lines.put(f"__EXIT__{proc.wait(timeout=1800)}")
-        except subprocess.TimeoutExpired:
-            if proc is not None:
-                proc.kill()
-            self.lines.put("邮箱导入流程超时（超过 1800 秒），已中止。")
-            self.lines.put("__EXIT__-1")
+            runner = tasks.refresh()
+            self._runner = runner
+            cursor = 0
+            while True:
+                chunk = runner.poll(cursor)
+                for line in chunk["lines"]:
+                    self.lines.put(line)
+                cursor = chunk["cursor"]
+                if not chunk["alive"]:
+                    self.lines.put("__EXIT__%s" % chunk["exitCode"])
+                    break
+                time.sleep(0.12)
         except Exception as exc:
             self.lines.put(f"启动邮箱导入流程失败：{type(exc).__name__}: {exc}")
             self.lines.put("__EXIT__-1")
@@ -402,7 +383,6 @@ class ImportWindow:
         self.mail_button.configure_state(
             enabled=mail_free, text="邮箱导入中…" if self.busy else "从邮箱导入")
         self.clean_button.configure_state(enabled=mail_free)
-
     def _start_login_flow(self) -> None:
         """第一步：登录小米账号（自动关 cookie 条 + 勾协议 + 填表 + 点登录）。
 
@@ -427,59 +407,40 @@ class ImportWindow:
         threading.Thread(target=self._run_login_flow, daemon=True).start()
 
     def _run_login_flow(self) -> None:
-        """子进程跑 xiaomi_login.py，逐行灌进日志窗。
+        """跑登录脚本，逐行灌进日志窗。启动参数在 `tasks.login()` 里（工具轨共用）。
 
         这个子进程会一直活到用户关掉浏览器（可能几十分钟），所以必须是后台线程 +
         流式读取：一次性 `communicate()` 会让界面在这几十分钟里一句话都不说，
         看起来就是"卡死"。
         """
-        env = dict(os.environ)
-        env["PYTHONIOENCODING"] = "utf-8"
-        proc = None
         try:
-            proc = subprocess.Popen(
-                [sys.executable, "-u", str(LOGIN_SCRIPT)],
-                cwd=str(PROJECT_DIR),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=env,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
-            )
-            for raw_line in proc.stdout or []:
-                self.lines.put(raw_line.rstrip())
-            # 上限 2 小时：够用户慢慢走完短信 + 申请，又不至于挂死后界面永不解锁
-            self.lines.put(f"__LOGIN_EXIT__{proc.wait(timeout=7200)}")
-        except subprocess.TimeoutExpired:
-            if proc is not None:
-                proc.kill()
-            self.lines.put("隐私中心这一步挂了 2 小时还没结束，已中止。")
-            self.lines.put("__LOGIN_EXIT__-1")
+            runner = tasks.login()
+            self._login_runner = runner
+            cursor = 0
+            while True:
+                chunk = runner.poll(cursor)
+                for line in chunk["lines"]:
+                    self.lines.put(line)
+                cursor = chunk["cursor"]
+                if not chunk["alive"]:
+                    self.lines.put("__LOGIN_EXIT__%s" % chunk["exitCode"])
+                    break
+                time.sleep(0.12)
         except Exception as exc:
             self.lines.put(f"启动隐私中心脚本失败：{type(exc).__name__}: {exc}")
             self.lines.put("__LOGIN_EXIT__-1")
 
     def _finish_login(self, code: int) -> None:
-        """第一步收尾。**绝不报「导入成功」** —— 这一步一个字节的数据都没动。"""
+        """第一步收尾。**绝不报「导入成功」** —— 这一步一个字节的数据都没动。
+
+        话术在 `tasks.login_message()` 里（工具轨说同一套话，别各写一份）。
+        """
         self.login_busy = False
         self.privacy_button.configure_state(enabled=True, text="登录小米账号")
-        if code == 0:
-            self._say("登录完成，窗口交给你了。", TERM_OK)
-            self._say("接下来你自己来：进隐私中心 → 过短信 → 申请导出，然后关掉窗口。", TERM_DIM)
-            self._say("等小米把导出邮件发来（通常几小时），再点右边的「从邮箱导入」。", TERM_DIM)
-        elif code == 2:
-            self._say("要存密码得先有账号：加 --account 你的小米账号。", TERM_ERR)
-            self._say("不过**不存密码也能用**：再点一次「登录小米账号」，", TERM_DIM)
-            self._say("在窗口里登录即可（第一次让浏览器记住，以后自动带出）。", TERM_DIM)
-        elif code == 3:
-            self._say("登录没成功（等超时了）。再点一次，在窗口里登完即可。", TERM_ERR)
-        elif code == 5:
-            self._say("浏览器没起来或被中途关掉了。再点一次即可。", TERM_ERR)
-        else:
-            self._say("这一步没完成（返回码 %d），看板数据没有任何改动。" % code, TERM_ERR)
+        kind, lines = tasks.login_message(code)
+        color = {"ok": TERM_OK, "warn": TERM_WARN, "err": TERM_ERR}.get(kind, TERM_DIM)
+        for line in lines:
+            self._say(line, color)
         self._sync_buttons()
 
     # -------------------------------------------------- 清理
@@ -487,33 +448,35 @@ class ImportWindow:
         """删掉下载的包 + 已处理邮件记录。**先预演给他看，再让他确认。**
 
         删数据不可逆：先把要删的逐条列进日志窗，再用模态框要一次明确确认。
-        看板数据（data.js）不在范围内。
+        看板数据（data.js）不在范围内。范围统计与真删都走 `tasks`（工具轨共用）。
         """
-        if self.busy:
-            self._say("正在导入中，等它跑完再清理。", TERM_ERR)
+        if self.busy or self.login_busy:
+            self._say("已经有一条链路在跑，等它结束再清理。", TERM_ERR)
             return
 
-        packages, state = cleanup.collect()
-        if not packages and state is None:
+        preview = tasks.cleanup_preview()
+        items = preview.get("items") or []
+        if not items:
             self._say("没有需要清理的东西：没有小米导出包，也没有已处理邮件记录。", TERM_OK)
             return
 
         self._say("即将删除下面这些（看板数据 data.js 不会被动）：", TERM_WARN)
-        for item in packages:
-            try:
-                size = item.stat().st_size / 1024 / 1024
-            except OSError:
-                size = 0.0
-            self._say("    [包]   %s（%.1f MB）" % (item, size), TERM_DIM)
-        if state is not None:
-            self._say("    [记录] %s（%s）" % (state, cleanup.describe_state(state)), TERM_DIM)
+        n_pkg = 0
+        n_state = 0
+        for item in items:
+            if item["kind"] == "package":
+                n_pkg += 1
+                self._say("    [包]   %s（%.1f MB）" % (item["path"], item["bytes"] / 1024 / 1024),
+                          TERM_DIM)
+            else:
+                n_state += 1
+                self._say("    [记录] %s（%s）" % (item["path"], item.get("detail") or ""), TERM_DIM)
 
-        total = len(packages) + (1 if state is not None else 0)
         prompt = "\n".join([
-            "将删除 %d 项：" % total,
+            "将删除 %d 项：" % len(items),
             "",
-            "  · 小米导出包 %d 个" % len(packages),
-            "  · 已处理邮件记录 %s" % ("1 个" if state is not None else "无"),
+            "  · 小米导出包 %d 个" % n_pkg,
+            "  · 已处理邮件记录 %s" % ("1 个" if n_state else "无"),
             "",
             "看板数据（data.js）不会被动。",
             "删掉记录后旧邮件可以重新被处理，但包需要重新下载。",
@@ -524,7 +487,12 @@ class ImportWindow:
             self._say("已取消，什么都没删。", TERM_DIM)
             return
 
-        removed, failed = cleanup.apply(packages, state)
+        result = tasks.cleanup_apply()
+        if not result.get("ok"):
+            self._say(result.get("error") or "清理失败。", TERM_ERR)
+            return
+        removed = result.get("removed") or []
+        failed = result.get("failed") or []
         self._say("删掉 %d 项。" % len(removed), TERM_OK)
         for path in removed:
             self._say("    %s" % path, TERM_DIM)
