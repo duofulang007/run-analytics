@@ -215,7 +215,10 @@ main {
   right: calc(100% + 14px);
   top: 50%;
   transform: translateY(-50%) translateX(3px);
-  white-space: nowrap;
+  /* 允许换行 + 限宽：失败原因会跟着这句一起显示（见 toolrail.js 的 reasonFrom），
+     一句话可能几十个字。短提示本来就没到 260px，仍然是单行。 */
+  max-width: 260px;
+  white-space: normal;
   background: rgba(255,255,255,.96);
   color: var(--ink);
   border: 1px solid var(--line-2);
@@ -299,12 +302,62 @@ main {
   from { transform: translateX(0); }
   to { transform: translateX(190%); }
 }
+/* 底下这行 = 「现在到哪一步」+ 「不想等了就停」。停止按钮贴右下角，
+   常态是低调的次级按钮（不该鼓励用户中断一条正在正常推进的任务），
+   只有卡死（data-stall）时才用琥珀色把它顶出来。 */
+.tr-progress-foot {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+}
 .tr-progress-step {
+  flex: 1;
+  min-width: 0;
   margin: 0;
   color: var(--ink-2);
   font-size: 11px;
   line-height: 1.45;
 }
+.tr-progress-stop {
+  flex: none;
+  font: inherit;
+  font-size: var(--fs-xs);
+  line-height: 1;
+  padding: 5px 9px;
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+  /* ⚠️ 这一行不能删（2026-09-28 真实浏览器轨抓到的）。
+     整张进度卡是 `pointer-events: none` —— 它当年是纯状态卡，故意让点击穿到
+     下面的看板上。加了停止按钮却忘了把指针事件放回来，后果是**按钮外观正常、
+     就是点不到**：命中测试直接跳过整张卡，落到它下面的标签栏上。
+     只给按钮开 auto、卡片其余部分继续穿透，两条意图就都保住了：
+     「不遮挡操作」+「停止能点」。 */
+  pointer-events: auto;
+}
+.tr-progress-stop:hover { background: var(--blue-50); color: var(--ink); }
+.tr-progress-stop:focus-visible { outline: 2px solid var(--blue-600); outline-offset: 2px; }
+.tr-progress-stop[data-state="stopping"] {
+  color: var(--ink-3);
+  cursor: default;
+  opacity: .7;
+}
+/* 卡死：进度环与圆点从蓝转琥珀（琥珀在本项目里只表示「需要行动」），
+   停止按钮同时被顶成主色 —— 这一眼就说明「它不动了，得你决定」。 */
+.tr-progress[data-stall="true"] { border-color: var(--amber-600); }
+.tr-progress[data-stall="true"] .tr-progress-dot { background: var(--amber-600); }
+.tr-progress[data-stall="true"] .tr-progress-fill { background: var(--amber-600); }
+.tr-progress[data-stall="true"] .tr-progress-step { color: var(--amber-800); }
+.tr-progress[data-stall="true"] .tr-progress-stop {
+  border-color: var(--amber-600);
+  background: var(--amber-50);
+  color: var(--amber-800);
+  font-weight: 600;
+}
+.tr-progress[data-stall="true"] .tr-progress-stop:hover { background: var(--amber-600); color: #fff; }
 
 /* ---------------------------------------------------- 确认框 ---- */
 .tr-modal-scrim {

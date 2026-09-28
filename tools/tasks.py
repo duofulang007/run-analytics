@@ -51,6 +51,23 @@ DATA_PREV = PROJECT_DIR / "data.prev.js"
 REFRESH_TIMEOUT = 1800       # 30 分钟：等邮件 + 下载 + 解析
 LOGIN_TIMEOUT = 7200         # 2 小时：够走完短信 + 申请导出
 
+# ---------------------------------------------------------------- 卡死判据
+# 2026-09-28 多弗朗报「一直在刷新、没有一个能停、卡在那里一直执行不会自己停」。
+# 根因不止一个（见 Runner 的注释），但共同的表现是：**界面永远在转，没有任何出口**。
+# 这一组阈值是「出口」的一半（另一半是界面上的停止按钮）：
+#
+#   STALL_HINT         没输出多久 → 界面提示「好像卡住了」+ 把停止按钮变醒目。
+#                      只提示，不打断可能合法的长任务。
+#   STALL_KILL         没输出多久 → 直接中止。取 10 分钟是因为**所有子脚本都会周期性
+#                      打进度**：下载是每 10 秒一行「还在等你登录…（剩 N 秒）」，
+#                      解压导入是逐分钟行。10 分钟一句话都没有，怎么算都是卡了。
+#   WATCHDOG_TICK      看门狗轮询间隔。只是个采样周期，不决定判据。
+#
+# ⚠️ 「等人操作」不算卡死 —— 它有输出。别把登录窗口等扫码误判成故障。
+STALL_HINT = 180
+STALL_KILL = 600
+WATCHDOG_TICK = 5
+
 
 # ---------------------------------------------------------------- 忙标志
 # 进程级单例。窗口和本地桥可能同时活着（双路径并存），所以标志放在模块里：
@@ -226,11 +243,19 @@ def cleanup_summary() -> dict:
 
 # ---------------------------------------------------------------- 长任务执行
 class Runner:
-    """跑一个子进程，逐行收集输出；可被查询进度、可被中止。
+    """跑一个子进程，逐行收集输出；可被查询进度、可被中止、卡住了会自己停。
 
     为什么要这个类：窗口那边是把输出投进队列、主线程定时抽；本地桥那边是要把输出
     推给 HTTP 客户端（轮询增量拉取）。两者要的是同一份「有谁在跑、跑到哪一行了」。
     所以这里做成一个简单的缓冲区 + 游标：`poll(since)` 返回从第 since 行起的新输出。
+
+    ⚠️ 读管道**必须在独立线程**（2026-09-28 修，别改回去）。
+        原先是本线程 `for raw in self._proc.stdout` 读完，才 `wait(timeout=...)` ——
+        那是**假超时**：管道不 EOF 就轮不到 wait，子进程挂了多久都不会被中止，
+        连 30 分钟的硬上限也不会触发。界面于是永远「转圈 + 计时器在涨」，
+        正是多弗朗 2026-09-28 报的「卡在那里一直在执行，不会自己停」。
+        现在：reader 线程读管道，本线程 `wait(timeout)`；超时由看门狗/超时分支
+        经 `_kill_tree()` 连**整棵进程树**一起杀。
     """
 
     def __init__(self, kind: str, argv: list, timeout: int) -> None:
@@ -242,13 +267,55 @@ class Runner:
         self.started = time.time()
         self.ended = None
         self.error = ""
+        # "" | "aborted"（有人点了停止） | "timeout"（到硬上限） | "stalled"（一直没输出）
+        self.stop_reason = ""
+        self.last_output_at = self.started
         self._proc = None
         self._thread = None
+        self._finished = threading.Event()
 
     # ---- 生命周期
     def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name="runner-%s" % self.kind)
         self._thread.start()
+        threading.Thread(target=self._watchdog, daemon=True,
+                         name="watchdog-%s" % self.kind).start()
+
+    def _emit(self, line: str) -> None:
+        """记一行输出。**每行都要摸 last_output_at** —— 卡死判据全靠它。"""
+        self.lines.append(line)
+        self.last_output_at = time.time()
+
+    def _kill_tree(self) -> None:
+        """杀掉**整棵进程树**，不只是直接子进程。
+
+        直接子进程是 `cmd.exe /d /c call xxx.cmd`，真正干活的在孙子辈手里
+        （python、Playwright 的 node 驱动、Edge）。只 `proc.kill()` 会留下孤儿继续
+        跑 —— 表现就是「点了停止，浏览器和 python 还在后台转」。Windows 上走
+        `taskkill /F /T`，非 Windows 退回 `kill`。
+
+        局限（写清楚，别假装万无一失）：`taskkill /T` 靠「下闸那一刻还活着的父子
+        关系」找树；直接子进程若已先退出、只剩孙子，它就找不到了 —— 那种残留由下次
+        启动时的 `close_lingering_browser()` 兜底。
+        """
+        proc = self._proc
+        if proc is None:
+            return
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=15,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except Exception:
+                pass
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
     def _run(self) -> None:
         env = dict(os.environ)
@@ -268,28 +335,82 @@ class Runner:
                 creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
                                if os.name == "nt" else 0),
             )
-            for raw in self._proc.stdout or []:
-                self.lines.append(raw.rstrip("\n"))
-            code = self._proc.wait(timeout=self.timeout)
-            self.exit_code = code
-        except subprocess.TimeoutExpired:
-            if self._proc is not None:
-                self._proc.kill()
-            self.lines.append("超过 %d 秒还没结束，已中止。" % self.timeout)
-            self.exit_code = -1
         except Exception as exc:
-            self.lines.append("启动失败：%s: %s" % (type(exc).__name__, exc))
-            self.exit_code = -1
-        finally:
-            self.ended = time.time()
-            _release(self.kind)
+            self._emit("启动失败：%s: %s" % (type(exc).__name__, exc))
+            self._finish(-1, "")
+            return
 
-    def abort(self) -> None:
-        if self._proc is not None and self._proc.poll() is None:
+        reader = threading.Thread(target=self._drain, daemon=True,
+                                  name="reader-%s" % self.kind)
+        reader.start()
+        reason = ""
+        try:
+            code = self._proc.wait(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            reason = "timeout"
+            self._emit("超过 %d 秒还没结束，已中止。" % self.timeout)
+            self._kill_tree()
             try:
-                self._proc.kill()
-            except Exception:
-                pass
+                code = self._proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                code = -1
+        # 让已经读到的行先落进缓冲，别被 ended 挡在外面（杀了进程时缓冲区的尾部
+        # 会丢，这没关系 —— 上面那两句我们自己的说明已经写进去了）。
+        reader.join(timeout=5)
+        self._finish(code, reason)
+
+    def _drain(self) -> None:
+        """reader 线程：把管道里的行搬进缓冲。进程被杀时读会抛，照单全收。"""
+        try:
+            for raw in self._proc.stdout or []:
+                self._emit(raw.rstrip("\n"))
+        except Exception:
+            pass
+
+    def _watchdog(self) -> None:
+        """盯「还有没有输出」。没输出 = 没进展 → 先由 poll 报 stalled 给界面提示，
+        再在这里兜底中止。**这是「不会自己停」的最后一道闸。**
+
+        注意本线程和 _run 线程可能同时下闸，所以两边都必须是幂等的
+        （taskkill 重复执行无害，stop_reason 只认第一个写进去的）。
+        """
+        while not self._finished.wait(WATCHDOG_TICK):
+            if self.ended is not None:
+                return
+            idle = time.time() - self.last_output_at
+            if idle >= STALL_KILL:
+                self._emit("已经 %d 分钟没有任何输出，判定卡住，已自动停止。"
+                           % int(idle // 60))
+                if not self.stop_reason:
+                    self.stop_reason = "stalled"
+                self._kill_tree()
+                return
+
+    def _finish(self, code, reason: str) -> None:
+        """收尾只此一处：先记结局再放锁，别让 poll 读到半拉状态。
+
+        `stop_reason` **只认第一个写进去的** —— 看门狗先判 stalled、随后超时分支
+        又跑完时，不能被覆盖成 timeout（界面要据它说清「为什么停的」）。
+        """
+        if reason and not self.stop_reason:
+            self.stop_reason = reason
+        self.exit_code = code
+        self.ended = time.time()
+        self._finished.set()
+        _release(self.kind)
+
+    def abort(self, reason: str = "aborted") -> bool:
+        """外部要求停止（界面上的「停止」按钮）。
+
+        **立刻杀树，但结局交给 poll。** 界面必须看到 `alive=false` 才收进度卡 ——
+        否则就成了「按了停止，却不知道到底停没停」。
+        """
+        if self.ended is not None:
+            return False
+        if reason and not self.stop_reason:
+            self.stop_reason = reason
+        self._kill_tree()
+        return True
 
     # ---- 查询
     @property
@@ -297,17 +418,29 @@ class Runner:
         return self.ended is None
 
     def poll(self, since: int = 0) -> dict:
-        """返回从第 since 行起的新输出 + 是否结束。"""
+        """返回从第 since 行起的新输出 + 是否结束 + 卡死/停止判据。
+
+        界面**不许自己算**卡死 —— 阈值和结局口径只此一份，就是这里和上面那组常量。
+        """
         new = self.lines[since:]
+        now = self.ended or time.time()
+        idle = max(0.0, now - self.last_output_at)
+        alive = self.ended is None
         return {
             "kind": self.kind,
             "from": since,
             "cursor": len(self.lines),
             "lines": new,
-            "alive": self.alive,
+            "alive": alive,
             "exitCode": self.exit_code,
             "elapsed": round((self.ended or time.time()) - self.started, 1),
             "error": self.error,
+            # ↓ 2026-09-28 新增：卡死与停止的判据
+            "idleSeconds": round(idle, 1),
+            "stalled": bool(alive and idle >= STALL_HINT),
+            "stopReason": self.stop_reason,
+            "stallHintSeconds": STALL_HINT,
+            "autoStopSeconds": STALL_KILL,
         }
 
 
@@ -317,6 +450,22 @@ _CURRENT: dict = {"refresh": None, "login": None}
 
 def current_runner(kind: str):
     return _CURRENT.get(kind)
+
+
+def abort_all(reason: str = "aborted") -> int:
+    """收摊时把还在跑的链路全停掉，返回停掉几条。
+
+    为什么必须有：Runner 的读线程是 daemon 线程，**桥一退，子进程不会跟着退** ——
+    cmd / python / Playwright / Edge 会留在系统里继续跑（表现成「明明关了看板，
+    后台还在转」，而且它们占着浏览器 profile，下次登录会报「profile 被占用」）。
+    """
+    stopped = 0
+    for kind in ("refresh", "login"):
+        runner = _CURRENT.get(kind)
+        if runner is not None and runner.ended is None:
+            if runner.abort(reason):
+                stopped += 1
+    return stopped
 
 
 def _spawn(kind: str, argv: list, timeout: int) -> Runner:
@@ -701,6 +850,50 @@ def _selftest() -> int:
     good, msg = refresh_finished_ok(FailRunner(), mtime)
     ok("返回码 9 → 判失败", good is False)
     ok("9 的话术是「没有新邮件」", "邮件" in msg)
+
+    # --- 超时与卡死：真起子进程验，不是读源码字面量 -------------------------
+    # 钉的是 2026-09-28「一直在刷新、不会自己停」那个回归。旧写法是**本线程读完
+    # stdout 再 wait(timeout)** —— 管道不 EOF 就轮不到 wait，超时永远不生效。
+    # 谁把它改回去，下面第一条探针就会红（它会一直活着，而不是在 20 秒内结束）。
+    def probe(argv, timeout):
+        runner = Runner("refresh", argv, timeout)   # 直接构造：不占 _BUSY，不碰 _CURRENT
+        runner.start()
+        t0 = time.time()
+        while runner.alive and time.time() - t0 < 60:
+            time.sleep(0.2)
+        return runner, round(time.time() - t0, 1)
+
+    silent = [sys.executable, "-u", "-c", "import time; time.sleep(30)"]
+    runner, took = probe(silent, timeout=3)
+    ok("不输出的子进程到点会被中止（超时不是死代码）",
+       not runner.alive and took < 20)
+    ok("超时的结局标成 timeout", runner.stop_reason == "timeout")
+    ok("poll 报了卡死/停止判据",
+       all(k in runner.poll(0) for k in
+           ("idleSeconds", "stalled", "stopReason", "autoStopSeconds")))
+
+    # 卡死兜底：把阈值临时压到秒级，验证「一直没输出 → 自己停」，而不是干等硬超时。
+    global STALL_HINT, STALL_KILL
+    old_hint, old_kill = STALL_HINT, STALL_KILL
+    STALL_HINT, STALL_KILL = 1, 3
+    try:
+        runner, took = probe(silent, timeout=60)
+    finally:
+        STALL_HINT, STALL_KILL = old_hint, old_kill
+    ok("一直没输出会自己停（不必干等硬超时）", not runner.alive and took < 30)
+    ok("卡死的结局标成 stalled", runner.stop_reason == "stalled")
+    ok("阈值恢复原值（别把判据留在测试值上）",
+       (STALL_HINT, STALL_KILL) == (old_hint, old_kill))
+
+    # 反向：**有人在操作的长任务不能被误判成卡死**。登录等扫码就是这种 ——
+    # 它每 10 秒报一次剩余秒数，属于「有输出」，不算没进展。
+    chatty = [sys.executable, "-u", "-c",
+              "import time\nfor _ in range(8):\n    print('还在等你登录…')\n    time.sleep(1)"]
+    runner, took = probe(chatty, timeout=40)
+    ok("有输出的长子进程不会被误判卡死",
+       runner.stop_reason == "" and runner.exit_code == 0)
+    ok("每行输出都刷新了「最后有动静」的时刻",
+       runner.last_output_at > runner.started)
 
     if fails:
         print("=== TASKS SELFTEST FAIL: %d 项 ===" % len(fails))

@@ -534,7 +534,19 @@ def main(argv=None) -> int:
     ad.close_lingering_browser()
 
     with sync_playwright() as p:
-        context = ad._launch_browser(p, headless=False, windowed=not args.fullscreen)
+        # ⚠️ 拉起窗口必须在**罩子里**（2026-09-28 修）。
+        # 原来这一行在下面那个 try 之外：它一失败，整个脚本就以「未捕获异常」收场 ——
+        # 退出码 1，而工具轨只会说「没完成（1）」，真正的原因连个去处都没有
+        # （多弗朗 2026-09-28 报的正是这句）。最常见的两种：上一次的浏览器实例还占着
+        # local/browser-profile，或者 Playwright 的驱动起不来。
+        try:
+            context = ad._launch_browser(p, headless=False, windowed=not args.fullscreen)
+        except Exception as exc:
+            say("")
+            say("浏览器没起来：%s" % ad.brief(exc))
+            say("多半是上一次的浏览器实例还占着 profile（local/browser-profile）。")
+            say("等几秒再点一次；一直这样就把 local/browser-profile 删掉，重新登录一次。")
+            return 5
         try:
             page = ad._open_page(context, LOGIN_URL)
             # 开窗就要置前一次：不然窗口开在后面，等于没开。

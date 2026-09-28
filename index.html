@@ -187,8 +187,11 @@
   </div>
 </aside>
 
-<!-- 刷新进度：非模态状态卡，不遮挡操作，也不显示虚假的百分比。 -->
-<section class="tr-progress" id="trProgress" data-open="false" aria-hidden="true" aria-live="polite" aria-atomic="true">
+<!-- 刷新进度：非模态状态卡，不遮挡操作，也不显示虚假的百分比。
+     2026-09-28 补：**带一个「停止」按钮**。那之前长任务一旦卡住（比如登录态过期、
+     脚本开着浏览器干等），界面没有任何出口 —— 三个按钮全被 busy 锁住，唯一的
+     自救是关掉整座桥。停止按钮走 POST /api/abort，后端会连整棵进程树一起杀。 -->
+<section class="tr-progress" id="trProgress" data-open="false" data-stall="false" aria-hidden="true" aria-live="polite" aria-atomic="true">
   <div class="tr-progress-head">
     <span class="tr-progress-dot" aria-hidden="true"></span>
     <strong id="trProgressTitle">正在刷新数据</strong>
@@ -198,7 +201,10 @@
        aria-valuemin="0" aria-valuemax="100" aria-valuetext="正在处理">
     <span class="tr-progress-fill"></span>
   </div>
-  <p class="tr-progress-step" id="trProgressStep">正在连接邮箱，检查新的导出邮件</p>
+  <div class="tr-progress-foot">
+    <p class="tr-progress-step" id="trProgressStep">正在连接邮箱，检查新的导出邮件</p>
+    <button class="tr-progress-stop" id="trProgressStop" type="button" data-state="idle" hidden>停止</button>
+  </div>
 </section>
 
 <!-- ==================================================== 确认框 ---->

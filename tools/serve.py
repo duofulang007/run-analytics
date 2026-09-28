@@ -31,11 +31,15 @@
 """
 from __future__ import annotations
 
+import atexit
 import json
+import os
 from pathlib import Path
 import secrets
+import signal
 import socket
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -44,6 +48,50 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tasks  # noqa: E402
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
+
+# ---------------------------------------------------------------- 存活标记
+# 「桥还活着吗」这件事必须由**桥自己**回答，而不是由起它的那次调用回答。
+# 总控台的 runner.py 起完桥就退出了（它只等端口应答，不等桥退出），
+# 所以它写的 result.json 里那个 state 只是「起桥那一刻的快照」。
+# 桥是常驻的，它得自己留下存活证据，否则总控台永远以为看板开着。
+#
+# 口径与 apex-console 的 runner-lab 对齐：同一个 %TEMP%\run-analytics\ 目录，
+# 同一对文件名（serve.pid / serve.port）。runner.py 起完桥会在这里反查真实 pid。
+STATE_DIR = Path(tempfile.gettempdir()) / "run-analytics"
+ALIVE_PID_FILE = STATE_DIR / "serve.pid"
+ALIVE_PORT_FILE = STATE_DIR / "serve.port"
+
+
+def mark_alive(port: int) -> None:
+    """留下「我还活着」的证据：当前进程 pid + 实际监听的端口。
+
+    pid 取 os.getpid() 而不是调用方传进来的 —— 这个文件将来要被
+    apex-console 用来判断「进程还在不在」，必须是**桥自己的** pid。
+    端口用实际 bind 的那个（桥自己挑的口，调用方给的只是起点）。
+    """
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        ALIVE_PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+        ALIVE_PORT_FILE.write_text(str(port), encoding="utf-8")
+    except OSError:
+        # 标记写不进去不该拖垮服务本身：桥照常提供看板，
+        # 只是总控台那边会如实报「未知」而不是假装知道。
+        pass
+
+
+def mark_dead() -> None:
+    """收摊：把存活证据撤掉。
+
+    正常退出路径（/api/quit、Ctrl+C）都会走到这里。
+    被 taskkill /F 强杀时这个函数**不会执行** —— 那时 pid 文件会残留，
+    所以消费方（apex-console 的 /runtime）不能只看这个文件在不在，
+    必须拿 pid 去验进程是否真的还活着。两边配合才严密。
+    """
+    for path in (ALIVE_PID_FILE, ALIVE_PORT_FILE):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 # 只发这些后缀的静态文件。白名单而非黑名单 —— 别把 local/（里面是浏览器 profile、
 # 邮箱凭证、日志）顺手发出去了。
@@ -276,7 +324,12 @@ class Handler(BaseHTTPRequestHandler):
             runner = tasks.current_runner(kind)
             if runner is None:
                 return self._json({"ok": False, "error": "当前没有在跑的任务"})
-            runner.abort()
+            # 注意这里要看 `abort()` 的返回值：`current_runner` 拿到的是**最后那个**
+            # runner，它可能早就结束了（界面轮询慢了一拍）。旧写法只要 runner 存在
+            # 就回 ok:true —— 那是句谎话，界面据此会一直显示「正在停止…」。
+            # 2026-09-28 端到端验证抓到的。
+            if not runner.abort():
+                return self._json({"ok": False, "error": "这条任务已经结束了"})
             return self._json({"ok": True, "aborted": kind})
 
         if route == "/api/cleanup/apply":
@@ -293,6 +346,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(result)
 
         if route == "/api/quit":
+            # 关桥之前先把还在跑的子进程树下闸。**不然会留下一串孤儿**：
+            # Runner 的读线程是 daemon，进程一退就把它们丢下了 —— 表现成
+            # 「明明关了看板，后台还有 python / Edge 在转」，而且它们占着浏览器
+            # profile，下一次登录会报「profile 被占用」。2026-09-28 补的这一刀。
+            tasks.abort_all()
             self._json({"ok": True, "note": "服务要关了，这个窗口可以关掉。"})
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
@@ -433,6 +491,57 @@ def _selftest() -> int:
         ok("toolrail.js 有降级态", "degraded" in js)
         ok("toolrail.js 有轮询游标", "'/log?kind='" in js or "/log?kind=" in js)
 
+    # --- 存活标记契约（总控台靠它判断「看板还开着吗」）---
+    # 总控台那条链是：runner.py 起桥 → 桥自己写 serve.pid/serve.port →
+    # apex-console 的 /runtime 拿 pid 验进程在不在 → 前端据此显示「运行中/已关闭」。
+    # 这里的三条断言锁的是「桥这一侧」的约定：路径、文件名、以及
+    # 「标记必须在端口绑好之后落、在收摊时撤」这两处接线。
+    ok("存活标记落在 %TEMP%\\run-analytics\\（与总控台同一目录口径）",
+       STATE_DIR == Path(tempfile.gettempdir()) / "run-analytics")
+    ok("存活标记文件名与总控台 runner-lab 对齐（serve.pid / serve.port）",
+       ALIVE_PID_FILE.name == "serve.pid" and ALIVE_PORT_FILE.name == "serve.port")
+    source = Path(__file__).read_text(encoding="utf-8")
+    ok("mark_alive 写的是桥自己的 pid（os.getpid）", "os.getpid()" in source)
+
+    # 接线断言：必须查「main 函数体里真的调用了」。
+    # ⚠️ 不能直接 `"mark_alive(port)" in source` —— 那句话就写在本文件里（断言自己的
+    # 字面量），字面量自匹配会让断言永远为真，等于没测。这是本仓库 AGENTS.md §10.12
+    # 「注释里出现被否定的字面量也会命中」的同一类坑。
+    # 也不能用 `split("def main...")[-1]` 图省事：本文件里出现这个词组的地方不止一处
+    # （下面这行断言就含它），取最后一个会切到断言自己身上、切出个空壳，
+    # 于是断言恒假 —— 第一次写就踩了，表现为「明明接了线却报 4 项失败」。
+    # 正解是按**行首**定位真正的函数定义，再切到下一个顶层 def。
+    lines = source.splitlines(keepends=True)
+    start = next(i for i, line in enumerate(lines) if line.startswith("def main(argv=None) -> int:"))
+    # main 是本文件最后一个顶层函数，后面可能没有下一个 def（当前就没有）
+    # —— 那种情况下切到文件末尾。用 next(..., None) 而不是裸 next，免得 StopIteration。
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("def ")), len(lines))
+    main_body = "".join(lines[start:end])
+    # 断言侧的字面量全部用拼接构造，避免自己出现在被搜文本里造成自匹配
+    call_alive = "mark_" + "alive(port)"
+    call_dead = "mark_" + "dead()"
+    ok("main 里真的调用了 mark_alive（切函数体查，不是全文子串）",
+       call_alive in main_body)
+    ok("收摊时真的调用了 mark_dead", call_dead in main_body)
+    # 顺序也有讲究：标记要在 bind 之后落（端口已能应答），撤要在 server_close 之前。
+    ok("mark_alive 落在端口绑定之后（桥能应答了才敢说自己在跑）",
+       -1 < main_body.find("_Bridge((") < main_body.find(call_alive))
+    ok("mark_dead 落在 server_close 之前（先撤标记再关端口，避免空隙）",
+       -1 < main_body.find(call_dead) < main_body.find("server.server_close()"))
+    ok("mark_dead 也注册到 atexit（正常返回路径也撤标记）",
+       "atexit.register(" + "mark_dead)" in source)
+    # 桥退出前必须停掉子进程树：Runner 的读线程是 daemon，桥一退就把
+    # cmd/python/Playwright/Edge 丢在系统里继续跑（还占着浏览器 profile）。
+    call_abort = "abort_" + "all()"
+    ok("main 收摊时会停掉在跑的子进程树（不然留一串孤儿）",
+       call_abort in main_body)
+    ok("atexit 也挂了停子进程（被 SIGTERM 带走时同样下闸）",
+       "atexit.register(tasks." + "abort_all)" in source)
+    # 被强杀时 finally 不执行 → 标记残留，消费方必须拿 pid 验进程。
+    # 这条约定得写在该文件的注释里，否则以后改这里的人不会知道要这么配合。
+    ok("被强杀靠 pid 兜底的约定写进了注释（消费方要读它）",
+       "taskkill" in source and "残留" in source)
+
     if fails:
         print("=== SERVE SELFTEST FAIL: %d 项 ===" % len(fails))
         for name in fails:
@@ -442,20 +551,78 @@ def _selftest() -> int:
     return 0
 
 
-def open_browser(url: str) -> None:
-    """绑好端口之后，自己开一次系统浏览器。
+def _apex_shell_exe() -> "Path | None":
+    """找 apex-console 的无边框壳 ApexShell.exe。找不到返回 None（调用方退回系统浏览器）。
 
-    以前这一步在 `打开看板.cmd` 里，靠一个 PowerShell 每 250ms 探端口再开 ——
-    PowerShell 冷启动本身就要 1–3 秒，而且总控台那条路 `runner.py` 也会开一次，
-    浏览器被开成两个标签页。挪进来之后：**零额外进程、零轮询，全链路只开这一次**。
+    两个查找位置，按优先级：
+    ① 环境变量 `APEX_SHELL_EXE`（别的机器 / 打包后留的出口）；
+    ② 默认安装位置 `D:\\Projects\\apex-console\\shell\\bin\\x64\\Debug\\...`。
+
+    ★ 为什么不用「本文件的相对路径」推：serve.py 属于 run-analytics 仓库，
+      apex-console 是**另一个**仓库，两者没有固定的相对关系（有人可能把
+      run-analytics 挪到别处）。所以要么走环境变量，要么认死已知的仓库位置。
+
+    ★ **只认 Debug 产物**：日常构建出的就是 Debug，Release 只在发布时才有；
+      猜 Release 会让「明明构建过了却找不到壳」，反而更难排查。
     """
     import os
+    from pathlib import Path as _P
+
+    override = os.environ.get("APEX_SHELL_EXE")
+    if override:
+        p = _P(override)
+        return p if p.is_file() else None
+
+    candidate = _P(r"D:\Projects\apex-console\shell\bin\x64\Debug"
+                   r"\net8.0-windows10.0.19041.0\win-x64\ApexShell.exe")
+    return candidate if candidate.is_file() else None
+
+
+def open_browser(url: str) -> None:
+    """绑好端口之后，自己开一次看板窗口。
+
+    ★ 优先用 apex-console 的**无边框壳**（`ApexShell.exe --url=<地址>`）：
+      看板于是是一个没有地址栏 / 标签页的独立窗口，观感与总控台一致，位置尺寸也会
+      被壳记住。**壳不可用时退回系统浏览器** —— 不能让看板打不开。
+
+    以前这一步是 `os.startfile`（系统浏览器）。2026-09-28 多弗朗要求改成桌面级窗口。
+
+    ⚠️ 壳的单实例锁是**按 URL** 分的：同一个看板地址再次打开时，壳会唤起已有窗口
+      而不是新开一个（见 shell/App.xaml.cs）。所以这里重开也不会堆出第二个窗口。
+
+    ⚠️ 这里**故意不等待**壳进程：它是常驻窗口，跟着桥一起等会把桥的启动拖死。
+    """
+    import os
+
+    exe = _apex_shell_exe()
+    if exe is not None:
+        try:
+            import subprocess
+            detached = 0
+            if os.name == "nt":
+                detached = getattr(subprocess, "DETACHED_PROCESS", 0) | \
+                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            subprocess.Popen(
+                [str(exe), "--url", url],
+                cwd=str(exe.parent),
+                creationflags=detached,
+                close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print("  看板窗口（无边框壳）：已打开")
+            return
+        except OSError:
+            pass    # 壳起不来不是致命错误：退回系统浏览器
+
     try:
         if os.name == "nt":
             os.startfile(url)           # 走默认浏览器，不抢前台
         else:
             import webbrowser
             webbrowser.open(url)
+        print("  看板窗口（系统浏览器）：已打开")
     except Exception:
         pass                            # 开不了浏览器不该拖垮服务，URL 已经打在横幅里了
 
@@ -503,6 +670,27 @@ def main(argv=None) -> int:
     server = _Bridge(("127.0.0.1", port), Handler)
     server.verbose = args.verbose
 
+    # ★ 存活标记要在**端口绑好之后**立刻落盘：总控台的 runner.py 就是靠
+    #   「探这个端口能应答」来判断桥起没起来的，标记晚写一拍就会有一小段
+    #   「桥能应答、但总控台还不知道它活着」的空窗。放在 bind 之后、开浏览器之前。
+    mark_alive(port)
+    # 三条收摊路径都要撤标记：正常返回、atexit、以及 SIGTERM/SIGINT。
+    # （taskkill /F 走不到这里 —— 那种情况由消费方拿 pid 验进程兜底。）
+    atexit.register(mark_dead)
+    # 同时也要下闸停掉在跑的子进程树：桥是被关掉的那一个，但它派生的
+    # cmd / python / Playwright / Edge 不会自己退。
+    atexit.register(tasks.abort_all)
+    for _sig in ("SIGINT", "SIGTERM"):
+        _handler = getattr(signal, _sig, None)
+        if _handler is None:
+            continue
+        try:
+            signal.signal(_handler, lambda *_: sys.exit(0))
+        except (ValueError, OSError):
+            # 非主线程注册信号会 ValueError；桥跑在主线程，理论上不会，
+            # 但别为了一个信号处理把服务起不来的风险引进来。
+            pass
+
     url = "http://127.0.0.1:%d/" % port
     print("run-analytics 本地桥已起来")
     print("  看板（工具轨已激活）：%s" % url)
@@ -522,6 +710,14 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         print("\n已关掉。")
     finally:
+        # 先撤存活标记再关 socket：反过来的话会有一小段
+        # 「端口已经没人应答、但标记还在」的窗口，总控台那一拍正好读到就会
+        # 判成「桥还在跑」，白等一轮轮询。撤标记不依赖 socket，放前面更严密。
+        #
+        # 但**停子进程要在最前面**：桥一退，daemon 线程不带走它派生的
+        # cmd/python/浏览器，会在系统里留着继续跑（并占住浏览器 profile）。
+        tasks.abort_all()
+        mark_dead()
         server.server_close()
     return 0
 

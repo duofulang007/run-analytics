@@ -112,6 +112,10 @@ function stubContext() {
   };
   const ctx = {
     window: null, document: doc, console, setTimeout, clearTimeout,
+    /* 进度卡的秒表用 setInterval。桩里让它空转：真定时器会让 node 的事件循环
+       一直挂着不退，而这里只关心状态（文本由 updateProgress 直接写），
+       不关心那个秒表跳不跳。 */
+    setInterval() { return 0; }, clearInterval() { },
     location: { hash: "" }, history: { replaceState() { } },
     getComputedStyle() { return { fontFamily: "Segoe UI", getPropertyValue() { return "3px"; } }; }
   };
@@ -252,7 +256,7 @@ function main() {
   ok("跑前或趋势样式残留", !css.includes(".plan-") && !css.includes(".extra-trends") &&
     !css.includes(".timeline-chart"));
   ["toolrail", "trRefresh", "trLogin", "trCleanup", "trProgress",
-    "trModal", "trDegrade"].forEach(id => {
+    "trModal", "trDegrade", "trProgressStop"].forEach(id => {
     ok("工具入口缺失：" + id, markup.includes('id="' + id + '"'));
   });
   run("load toolrail.js", () => vm.runInContext(
@@ -270,6 +274,52 @@ function main() {
   ok("清理没有先预演",
     fs.readFileSync(path.join(ROOT, "toolrail.js"), "utf8").includes("/cleanup/preview"));
 
+  /* 停止出口：2026-09-28 之前**根本不存在**。任务一卡住（典型：登录态过期，
+     脚本开着浏览器干等），三个按钮全被 busy 锁死、进度卡无限转圈，唯一的自救是
+     关掉整座桥。下面四条钉住它：接口接线、后端判据的消费、判据不许前端另算、
+     以及「跑的时候能停、收起时跟着收」这个行为。 */
+  const railSrc = fs.readFileSync(path.join(ROOT, "toolrail.js"), "utf8");
+  ok("停止按钮没有接中止接口", railSrc.includes("/abort?kind="));
+  ok("停止按钮走的是 POST", /abort\?kind='[\s\S]{0,80}method:\s*'POST'/.test(railSrc));
+  ok("没有消费后端的停止原因", railSrc.includes("stopReason"));
+  ok("没有画后端的卡死判据", railSrc.includes("stalled"));
+  /* 卡死阈值只许有一份（tools/tasks.py 的 STALL_HINT / STALL_KILL）。
+     前端自己写个秒数去比 = 两端必然会漂，最后是「界面说没事、其实早停了」。
+     注意断言只看**拿数字自己比**这种写法，注释里提常量名是允许的
+     （第一版就是被自己注释里的 STALL_HINT 撞红的）。 */
+  ok("卡死阈值被前端硬编码了（该直接用后端给的 stalled）",
+    !/idleSeconds\s*[><]=?\s*\d/.test(railSrc) && !/\b(600|180)\s*000\b/.test(railSrc));
+  /* 进度卡本体是 pointer-events:none（当年是纯状态卡，故意不挡操作）。
+     给它加按钮时**必须把按钮自己的指针事件放回来** —— 少这一行，
+     按钮外观完全正常、就是点不到（2026-09-28 真实浏览器轨抓到的真 bug）。 */
+  ok("停止按钮没有开指针事件（整张卡是 none，会连按钮一起被略过）",
+    /\.tr-progress-stop\s*\{[^}]*pointer-events:\s*auto/.test(css));
+  /* 失败必须能说出**原因**。2026-09-28 多弗朗看到的那句「没完成（1）」背后是一条
+     Python traceback，而它在轮询里被逐批取走、没人留底，于是界面只能说「没完成」。
+     这两条钉住：留底 + 带出来。 */
+  ok("失败时没把任务最后那句话留底", railSrc.includes("rememberLines(kind, d.lines)"));
+  ok("失败时没把原因带出来（只剩「没完成（x）」）", railSrc.includes("reasonFrom(kind)"));
+  ok("提示条不允许换行（长原因会横着铺到屏幕外）",
+    /\.tr-tip\s*\{[^}]*white-space:\s*normal/.test(css));
+
+  /* 批处理文件必须是 CRLF。2026-09-28 就是这条把「登录」弄坏的 ——
+     cmd 找标签（goto）时按「CRLF = 2 字节」算偏移，LF 文件每行只占 1 字节，
+     跳转落点于是按行数漂移：落行首侥幸没事，落行中间就把注释内容当命令执行
+     （退出码 9009；或误调 python 报 `can't open file 'block-buffers'`）。
+     实测同一份内容 LF 坏 / CRLF 好，所以谁把行尾改回 LF，这里必须红。 */
+  fs.readdirSync(ROOT).filter(f => f.endsWith(".cmd")).forEach(f => {
+    const text = fs.readFileSync(path.join(ROOT, f)).toString("latin1");
+    const crlf = (text.match(/\r\n/g) || []).length;
+    const bareLf = (text.match(/(^|[^\r])\n/g) || []).length;
+    ok("批处理不是 CRLF（cmd 的 goto 会跳错位置）：" + f, crlf > 0 && bareLf === 0);
+    ok("批处理里混进了非 ASCII（该类文件约定 ASCII-only）：" + f,
+      !/[^\x00-\x7f]/.test(text));
+  });
+  ok("没有 .gitattributes 钉住 cmd 的行尾（改一次就回归）",
+    fs.existsSync(path.join(ROOT, ".gitattributes")) &&
+    /\*\.cmd\s+text\s+eol=crlf/.test(
+      fs.readFileSync(path.join(ROOT, ".gitattributes"), "utf8")));
+
   /* 工具轨的失败态必须能**自己走出去**。2026-09-27 多弗朗报的「侧边栏三个按钮
      坏了、用不了」根因就是这个：err 态永久粘住 —— 一次失败之后按钮永远停在那句
      文案上，点几次、等多久都一样，唯一的自救是刷新页面（而没人会想到）。
@@ -280,6 +330,21 @@ function main() {
   ok("失败提示有保鲜期，不会永久粘住", rail.alertTTL > 0 && rail.alertTTL <= 300000);
   rail.setBtn('login', 'idle', '登录小米账号');
   ok("回到 idle 之后不再算告警", rail.isAlert('login') === false);
+
+  /* 停止出口的行为断言（不只是「源码里有这个词」）。 */
+  rail.showProgress(null, null, 'refresh');
+  ok("刷新在跑时停止按钮要能点",
+    rail.stopState() === 'ready' && els.trProgressStop.disabled === false &&
+    els.trProgressStop.hidden === false);
+  ok("进度卡默认不是卡死态", rail.stallShown() === false);
+  rail.updateProgress(
+    { alive: true, stalled: true, idleSeconds: 600, elapsed: 600, lines: [] }, 'refresh');
+  ok("卡住时进度卡要转成琥珀提示",
+    rail.stallShown() === true && text("trProgressStep").includes("没有新进展"));
+  rail.hideProgress();
+  ok("收起进度卡时停止按钮跟着收",
+    rail.stopState() === 'idle' && els.trProgressStop.hidden === true &&
+    rail.stallShown() === false);
 
   return { errors, runs: runs.length, weeks: weeks.length,
     metricsKB: Math.round(JSON.stringify(M).length / 1024) };

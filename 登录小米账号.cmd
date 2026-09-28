@@ -49,7 +49,10 @@ goto nopython
 set "PYTHONIOENCODING=utf-8"
 echo Interpreter: %PY%
 echo.
-%PY% "%SCRIPT%" %*
+rem -u = unbuffered. The dashboard's tool rail reads this process through a pipe,
+rem and Python block-buffers stdout in that case -- the "waiting for you to sign
+rem in" lines would never reach the page. See the mail-import launcher for the same note.
+%PY% -u "%SCRIPT%" %*
 set "SCRIPT_EXIT=%ERRORLEVEL%"
 if /i "%RUN_ANALYTICS_NO_PAUSE%"=="1" exit /b %SCRIPT_EXIT%
 echo.

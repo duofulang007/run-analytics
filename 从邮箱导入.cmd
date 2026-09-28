@@ -51,7 +51,11 @@ rem Pass optional fetch_from_mail.py arguments through; successful imports stay 
 set "ARGS=%*"
 echo Interpreter: %PY%
 echo.
-%PY% "%FETCH%" %ARGS%
+rem -u = unbuffered. Without it Python block-buffers stdout when it is a pipe
+rem (which is how the dashboard's tool rail reads it), so every progress line --
+rem including "still waiting for you to sign in" -- sat invisible in the buffer
+rem until the process exited. Symptom: the progress card never moved.
+%PY% -u "%FETCH%" %ARGS%
 set "SCRIPT_EXIT=%ERRORLEVEL%"
 if /i "%RUN_ANALYTICS_NO_PAUSE%"=="1" exit /b %SCRIPT_EXIT%
 echo.
