@@ -176,6 +176,34 @@ def monotony_series(by_day, end, weeks=12):
     return out
 
 
+def minute_window_points(points, keep):
+    """同一分钟出现多条记录时，只保留覆盖最完整的那条。
+
+    小米导出包在部分场次会把同一分钟写成两条 steps 记录（一条覆盖半分钟、
+    一条覆盖整分钟，时间戳都取该分钟）。两条都收进来会同时踩两个坑：
+    ① 配速被偏小的那条带慢（实测 2026-09-28 分段配速 9'43"，而整场是 6'54"）；
+    ② 点数翻倍，23 分钟的段落显示成「46 个分钟点」。
+    按分钟去重、取「距离最大 / 步数最大 / 配速最小」那一条，23 个受影响场次里
+    21 场还原出的总里程与 sport_record 的距离吻合到 ±5%；求和 / 取小 / 取均值
+    都还原不出来（偏差 16%~87%）。
+
+    keep: "max" 给距离、步数用；"min" 给配速（秒/公里，越小越快）用。
+    同一分钟只有一条记录时原样返回，所以对干净数据是幂等的。
+    """
+    best = {}
+    for point in points:
+        try:
+            minute, value = float(point[0]), float(point[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not (math.isfinite(minute) and math.isfinite(value)):
+            continue
+        key = round(minute, 2)
+        if key not in best or (value > best[key] if keep == "max" else value < best[key]):
+            best[key] = value
+    return [[key, best[key]] for key in sorted(best)]
+
+
 # ---------------------------------------------------------------- 能力指标
 def efficiency_factor(r):
     """EF = 速度(m/min) / 心率。只对稳态跑有意义，所以调用方要先过 cv() 筛。"""
@@ -186,7 +214,7 @@ def efficiency_factor(r):
 
 def decoupling(r):
     """有氧解耦 Pa:HR = 后半程 EF / 前半程 EF - 1。负值 = 后半程心率漂高。"""
-    ps = [(m, p) for m, p in (r.get("paceSeries") or []) if p]
+    ps = [(m, p) for m, p in minute_window_points(r.get("paceSeries") or [], "min") if p]
     hs = [(m, h) for m, h in (r.get("hrSeries") or []) if h]
     if len(ps) < 12 or len(hs) < 12:
         return None
@@ -207,9 +235,11 @@ def decoupling(r):
 def run_segment_analysis(run):
     """按本场总时长三等分，汇总逐分钟配速、心率、步频的中位数。"""
     series = {
-        "pace": run.get("paceSeries") or [],
+        "pace": minute_window_points(run.get("paceSeries") or [], "min"),
+        # 心率每分钟只有一条（实测 69 分钟 69 条），不做取大：半分钟窗口的最高心率
+        # 不能代表整分钟，取大反而是编数据。
         "hr": run.get("hrSeries") or [],
-        "cadence": run.get("cadSeries") or [],
+        "cadence": minute_window_points(run.get("cadSeries") or [], "max"),
     }
     duration = (run.get("duration") or 0) / 60.0
     if duration <= 0:
@@ -1008,7 +1038,7 @@ def build(runs, today=None):
     derived = {}
     run_segments = {}
     for r in runs:
-        ps = [p for _, p in (r.get("paceSeries") or []) if p]
+        ps = [p for _, p in minute_window_points(r.get("paceSeries") or [], "min") if p]
         derived[r["id"]] = {
             "ef": efficiency_factor(r) if cv(ps) < STABLE_CV else None,
             "cv": round(cv(ps), 3),
@@ -1310,6 +1340,26 @@ def selftest():
         errs.append("后程提速且心率下降时，综合提示方向不正确")
     sparse = run_segment_analysis({"duration": 60, "paceSeries": [], "hrSeries": [], "cadSeries": []})
     ck("分钟数据缺失时不伪造分段值", sparse["segments"][0]["hr"]["value"], None)
+
+    # 同一分钟被写成两条记录时必须按分钟去重（设备先报半分钟窗口、再报整分钟窗口，
+    # 时间戳都取该分钟）。不去重会同时把配速带慢、把点数翻倍 —— 2026-09-28 那场
+    # 「前程 9'43" / 46 个分钟点」就是这么来的，别再把这条去重删掉。
+    ck("逐分钟配速按分钟取最快的一条",
+       minute_window_points([[0, 600], [0, 400], [1, 500], [1, 400], [2, 410]], "min"),
+       [[0, 400], [1, 400], [2, 410]])
+    ck("逐分钟步频按分钟取最多的一条",
+       minute_window_points([[0, 120], [0, 180], [1, 180]], "max"), [[0, 180], [1, 180]])
+    ck("每分钟只有一条时原样返回",
+       minute_window_points([[0, 400], [1, 410]], "min"), [[0, 400], [1, 410]])
+    dup_run = run_segment_analysis({
+        "duration": 30 * 60,
+        "paceSeries": ([[i, 420 if i < 10 else 410 if i < 20 else 430] for i in range(30)]
+                       + [[i, 800] for i in range(30)]),
+        "hrSeries": [[i, 140 if i < 10 else 150 if i < 20 else 160] for i in range(30)],
+        "cadSeries": [[i, 170 if i < 10 else 172 if i < 20 else 168] for i in range(30)],
+    })
+    ck("重复的半分钟记录不改变分段配速", dup_run["segments"][0]["pace"]["value"], 420)
+    ck("重复的半分钟记录不增加点数", dup_run["segments"][0]["pace"]["n"], 10)
 
     # 有氧底座：热身+燃脂+有氧 才算低强度
     ck("有氧底座 含 aer", aerobic_base_share(

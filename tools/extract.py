@@ -9,6 +9,7 @@
 import csv
 import json
 import os
+import sys
 import datetime
 import collections
 
@@ -114,6 +115,20 @@ def window(points, a, b):
 
 
 # ---------------------------------------------------------------- 3. 组装跑步
+def _dedupe_minute(points, keep):
+    """同一分钟两条记录时只留最完整的一条。
+
+    口径唯一在 metrics.minute_window_points。本脚本是早期备用入口（正常导入走
+    import_zip.py），这里跟主链路用同一份口径，免得两条路产出不一样的 data.js。
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import metrics as _metrics
+        return _metrics.minute_window_points(points, keep)
+    except Exception:
+        return points
+
+
 num = lambda v, d=0: (v if isinstance(v, (int, float)) else d)
 
 runs = []
@@ -181,8 +196,8 @@ for r in runsAll:
         "recover": num(v.get("recover_time")),
         "zones": zones,
         "hrSeries": hr_series,
-        "paceSeries": pace_series,
-        "cadSeries": cad_series,
+        "paceSeries": _dedupe_minute(pace_series, "min"),
+        "cadSeries": _dedupe_minute(cad_series, "max"),
     })
 
 log.append("产出跑步条数 = %d" % len(runs))

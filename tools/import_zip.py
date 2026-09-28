@@ -252,6 +252,21 @@ def window(points, a: int, b: int):
 
 
 # ------------------------------------------------------------------ 组装
+def _dedupe_minute(points, keep):
+    """同一分钟写了两条记录时只留覆盖最完整的那条。
+
+    口径唯一在 metrics.minute_window_points（那里写了为什么必须去重）。这里延迟
+    导入并降级：指标模块出问题不该连带整个导入失败，退化成原样返回即可 ——
+    metrics 层计算时还会再兜一次，看板结论不受影响。
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import metrics as _metrics
+        return _metrics.minute_window_points(points, keep)
+    except Exception:                              # pragma: no cover
+        return points
+
+
 def build_runs(raw: list[dict], hr_pts, step_pts) -> list[dict]:
     runs = []
     for item in raw:
@@ -313,8 +328,8 @@ def build_runs(raw: list[dict], hr_pts, step_pts) -> list[dict]:
                 "ext": int(num(v.get("hrm_extreme_duration"))),
             },
             "hrSeries": hr_series,
-            "paceSeries": pace_series,
-            "cadSeries": cad_series,
+            "paceSeries": _dedupe_minute(pace_series, "min"),
+            "cadSeries": _dedupe_minute(cad_series, "max"),
         })
     return runs
 
