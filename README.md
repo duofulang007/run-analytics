@@ -5,7 +5,7 @@
 ## 日常使用
 
 1. 在小米运动健康的隐私中心申请导出，等待通知邮件。
-2. 双击「打开看板.cmd」，或从 APEX Console 的 runner-lab 打开看板。需要更新时，使用右侧工具栏的「刷新数据」。
+2. 双击「打开看板.cmd」，或从 ControlPod（简称 CPod）的跑步看板入口打开。需要更新时，使用右侧工具栏的「刷新数据」。
 3. 首页看最新一场和近 28 天；「体能变化」看训练负荷趋势与逐场表现；「周复盘」看最近五周；「历史」按月份找回全部场次并查看前、中、后程。
 
 导入完成后，双击 `index.html` 也能离线查看已有数据。静态直开时，刷新、登录和清理按钮会提示需要本地服务。
@@ -36,20 +36,24 @@
 
 ## 更新与故障排查
 
-通常只需从看板点「刷新数据」。登录态过期时，使用右侧「登录小米账号」，在脚本打开的 Edge 窗口完成登录。刷新过程中会显示当前阶段和用时；长任务长时间没有进展时，进度卡会转为琥珀色并给出「停止」按钮，后端也会在持续无输出时自动中止，结束时说明是停止、超时还是卡住，失败会带出脚本输出的最后原因。「打开看板」优先复用 APEX Console 的无边框看板窗口（环境变量 `APEX_SHELL_EXE` 可指定壳的路径），找不到壳时退回系统浏览器。右侧「清理下载包和记录」会先列出待删除项目，再要求确认；它保留 `data.js`。
+通常只需从看板点「刷新数据」。登录态过期时，使用右侧「登录小米账号」，在脚本打开的 Edge 窗口完成登录。刷新过程中会显示当前阶段和用时；长任务长时间没有进展时，进度卡会转为琥珀色并给出「停止」按钮，后端也会在持续无输出时自动中止，结束时说明是停止、超时还是卡住，失败会带出脚本输出的最后原因。「打开看板」优先复用 CPod 的无边框看板窗口（环境变量 `APEX_SHELL_EXE` 可指定壳的路径），找不到壳时退回系统浏览器。右侧「清理下载包和记录」会先列出待删除项目，再要求确认；它保留 `data.js`。
+
+仓库根的 `.apex/module.json` 是 CPod 的项目入口声明，执行适配器位于同目录；看板本身仍可通过各 `.cmd` 文件独立使用。
+
+Python 依赖与 CPod 解耦，安装到本仓库自己的 `.venv`：首次使用先在仓库根运行 `powershell -ExecutionPolicy Bypass -File .\setup.ps1`。看板、登录、导入和清理入口都只使用本项目环境。AES 加密的导出包属于可选格式；需要导入此类文件时，再运行 `.venv\Scripts\python.exe -m pip install pyzipper`。
 
 命令行入口：
 
 ```powershell
-python tools/fetch_from_mail.py --check      # 只查看候选邮件
-python tools/fetch_from_mail.py --dry-run    # 预览要使用的本地包
-python tools/fetch_from_mail.py              # 下载并导入
-python tools/import_zip.py <zip 路径>        # 手动导入已有包
-python tools/metrics.py --check              # 只重算，不写文件
+\.venv\Scripts\python.exe tools/fetch_from_mail.py --check      # 只查看候选邮件
+\.venv\Scripts\python.exe tools/fetch_from_mail.py --dry-run    # 预览要使用的本地包
+\.venv\Scripts\python.exe tools/fetch_from_mail.py              # 下载并导入
+\.venv\Scripts\python.exe tools/import_zip.py <zip 路径>        # 手动导入已有包
+\.venv\Scripts\python.exe tools/metrics.py --check              # 只重算，不写文件
 node tools/check.js                          # 页面逻辑与数据关联自检
-python tools/metrics.py --selftest
-python tools/serve.py --selftest
-python tools/tasks.py --selftest             # 长任务执行器的超时与卡死判据
+\.venv\Scripts\python.exe tools/metrics.py --selftest
+\.venv\Scripts\python.exe tools/serve.py --selftest
+\.venv\Scripts\python.exe tools/tasks.py --selftest             # 长任务执行器的超时与卡死判据
 ```
 
 页面、数据和本地服务是一条路径：`index.html` 加载 `data.js`、`app.js` 和 `toolrail.js`；本地服务 `tools/serve.py` 只提供静态文件和刷新、登录、清理、停止接口。服务仅监听 `127.0.0.1`，对 API 使用启动时随机 token，并用静态文件白名单阻止网页访问 `local/`、导入脚本和仓库元数据。
@@ -77,4 +81,4 @@ python tools/tasks.py --selftest             # 长任务执行器的超时与卡
 | `tools/metrics.py`、`data.js` | 预计算指标与本地生成数据 |
 | `tools/check.js` | 页面逻辑自检 |
 
-改版的目标和执行记录见 [PRODUCT_PLAN_V2.md](PRODUCT_PLAN_V2.md)。旧看板设计稿、旧计划文档和旧外壳代码已删除，需要时从 Git 历史里取；以当前代码和本文为准。
+详细设计背景见 [PRODUCT_PLAN_V2.md](PRODUCT_PLAN_V2.md)；运行与维护以当前代码和本文为准。

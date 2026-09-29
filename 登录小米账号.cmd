@@ -30,20 +30,10 @@ set "SCRIPT=%ROOT%tools\xiaomi_login.py"
 if not exist "%SCRIPT%" goto missing
 
 set "PY="
-rem playwright lives in the shared venv next to apex-console; it is the only
-rem interpreter on this machine known to have it, so it is tried first.
-set "CAND=%ROOT%..\apex-console\backend\.venv\Scripts\python.exe"
+set "CAND=%ROOT%.venv\Scripts\python.exe"
 if exist "%CAND%" set "PY=%CAND%"
 if defined PY goto run
-
-where py >nul 2>&1 && set "PY=py -3"
-if defined PY goto run
-where python >nul 2>&1 && set "PY=python"
-if defined PY goto run
-
-if exist "%USERPROFILE%\.workbuddy\binaries\python\versions\3.13.12\python.exe" set "PY=%USERPROFILE%\.workbuddy\binaries\python\versions\3.13.12\python.exe"
-if defined PY goto run
-goto nopython
+goto noenv
 
 :run
 set "PYTHONIOENCODING=utf-8"
@@ -70,10 +60,9 @@ if /i "%RUN_ANALYTICS_NO_PAUSE%"=="1" exit /b 1
 pause
 exit /b 1
 
-:nopython
-echo [ERROR] No Python 3 found. Install Python 3 or add it to PATH.
-echo         playwright is required; the shared venv is:
-echo           ..\apex-console\backend\.venv\Scripts\python.exe
+:noenv
+echo [ERROR] run-analytics local Python environment is not ready.
+echo         Run setup.ps1 in this project folder first.
 echo.
 if /i "%RUN_ANALYTICS_NO_PAUSE%"=="1" exit /b 1
 pause

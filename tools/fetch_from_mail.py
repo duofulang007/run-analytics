@@ -675,7 +675,7 @@ def run_auto_download(page_url: str, dest_dir: Path) -> Path:
     except ImportError:
         raise RuntimeError(
             "没装 playwright，自动下载用不了。装一下："
-            "backend\\.venv\\Scripts\\python.exe -m pip install playwright"
+            ".venv\\Scripts\\python.exe -m pip install -r requirements.txt"
         ) from None
     if not AUTO_DOWNLOAD_SCRIPT.is_file():
         raise RuntimeError("auto_download.py 不存在：%s" % AUTO_DOWNLOAD_SCRIPT)

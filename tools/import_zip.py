@@ -445,7 +445,7 @@ def main(argv=None) -> int:
         except NotImplementedError:
             say("")
             say("这个包用的是 AES 加密，标准库不支持。装一下 pyzipper 再重试：")
-            say("  backend\\.venv\\Scripts\\python.exe -m pip install pyzipper")
+            say("  .venv\\Scripts\\python.exe -m pip install pyzipper")
             return 5
 
         say("")

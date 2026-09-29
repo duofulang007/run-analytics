@@ -35,15 +35,12 @@ set "ENTRY=tools\serve.py"
 
 if not exist "%ROOT%%ENTRY%" goto noentry
 
-rem --- pick a python (same candidates as the other launchers here) -----------
-rem The import pipeline needs playwright, which lives in the apex-console venv.
+rem --- use this project's isolated Python environment ------------------------
 set "PY="
-set "CAND=%ROOT%..\apex-console\backend\.venv\Scripts\python.exe"
+set "CAND=%ROOT%.venv\Scripts\python.exe"
 if exist "%CAND%" set "PY=%CAND%"
 if defined PY goto havepy
-for %%P in (python.exe) do set "PY=%%~$PATH:P"
-if defined PY goto havepy
-goto nopython
+goto noenv
 
 :havepy
 rem --- leave a trail in %TEMP%\run-analytics\ so a launcher can tell what happened ---
@@ -62,11 +59,10 @@ rem is bound -- so the page is reachable the moment the browser asks for it.
 "%PY%" "%ROOT%%ENTRY%" --open-browser
 goto end
 
-:nopython
-echo [ERROR] No python.exe found.
-echo         Tried: ..\apex-console\backend\.venv\Scripts\python.exe and PATH.
-echo         Workaround: double-click index.html
-echo         (the dashboard shows fine; only the tool rail is unavailable).
+:noenv
+echo [ERROR] run-analytics local Python environment is not ready.
+echo         Run setup.ps1 in this project folder first.
+echo         Workaround: double-click index.html for the static dashboard.
 pause
 exit /b 1
 

@@ -107,7 +107,7 @@ class NeedLogin(RuntimeError):
 
 
 # ------------------------------------------------------------------ DPAPI
-# 用 ctypes 直接调 crypt32，不引入 pywin32：本机只有 venv 里有 playwright，
+# 用 ctypes 直接调 crypt32，不引入 pywin32：playwright 由本项目虚拟环境提供，
 # 装第三方包只为加密一个密码不值得。DPAPI 的密文绑定「当前机器 + 当前 Windows 用户」，
 # 同一个文件拷到别的电脑或别的用户下解不开 —— 这正是我们要的性质。
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
