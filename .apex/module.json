@@ -5,7 +5,7 @@
   "projectName": "跑步数据分析",
   "projectDescription": "小米运动健康导出包 → 本地跑步看板。只读取跑步相关的两个成员，其余成员（含个人信息）一律不打开。",
   "name": "打开跑步看板",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "projectRoot": ".",
   "requiresAdmin": false,
   "singleInstance": true,

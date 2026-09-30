@@ -10,8 +10,6 @@
 
 导入完成后，双击 `index.html` 也能离线查看已有数据。静态直开时，刷新、登录和清理按钮会提示需要本地服务。
 
-页面已移除旧周期图表和跑前计划。以前保存在 `local/run_plans.json` 的计划文件留在本机，程序不再读取，也不会在清理下载包时删除。
-
 ## 数据与隐私
 
 - 原始跑步记录与预计算结果存于 `data.js`。它和 `local/`、下载包都被 Git 忽略，不应上传或分享。
@@ -32,6 +30,18 @@
 
 统计在 `tools/metrics.py` 完成，页面脚本 `app.js` 只负责展示和跳转。
 
+### 单场六维对比
+
+「体能变化」页的六维图可选择任意场次，按此前 28/56/90/180 天筛选相似跑；连接本地服务时支持自定义日期、指定一场或勾选多场取中位数。距离、心率容差及强度条件可调整，图线颜色、线型和显隐可设置并保存在本机。对照只取本场之前的记录；同日缺时间时不推测先后。
+
+图表旁展示总分、综合点评、六项原始数值及差值。无法评分时说明原因并保留数据对照。总分较高不代表每项都改善。
+
+默认相似条件为距离 ±20%、平均心率 ±5 bpm、设备强度类别相同，同时要求时长 ±25%。六项为配速、后程效率保持、配速稳定性、平均心率、时长、较高强度占比；后三项只反映条件，不计入总分。逐分钟分析取本场时长中间 80%，配速至少 12 点；后程保持比较前后两半匹配的分钟速度/心率，各至少 6 点。
+
+图形对照中位数为 50，按本场之前 180 天默认相似稳态跑的四分位距转换，一个波动单位对应 20 点并截在 0–100；配速/保持率/波动率最小尺度为 8 秒/km、3/1.5 个百分点，条件轴心率/时长/强度占比最小尺度为 5 bpm、5 分钟、5 个百分点。总分只对前三项按 60%/25%/15% 汇总，参考为 50，差值 ±10 分内展示“接近参考”。权重、尺度与阈值是尚未个人跑测标定的展示规则，不表示实测能力或提升百分比。非稳态、条件不同或有效对照不足三场时只看原始差值，不评分；核心指标缺失时不重新分配权重。天气、路线及训练目的尚未纳入。
+
+静态直开使用 `data.js` 中预计算的四种默认范围，支持场次切换和图线设置。自定义对比需要通过「打开看板」连接本地服务；连接失效时页面提供原因和重连入口。范围内场数与实际对照场数分别展示，范围改变但对照相同时会说明原因。
+
 方法参考：[Morton 等的跑步训练反应模型](https://pubmed.ncbi.nlm.nih.gov/2246166/)与[Wallace 等对训练负荷模型和实际指标的比较](https://pubmed.ncbi.nlm.nih.gov/24104194/)。这里没有个人跑测、主观疲劳、天气或路线记录，因此只展示负荷代理值和可比跑线索，不输出确定的“超量恢复”诊断。
 
 ## 更新与故障排查
@@ -45,18 +55,20 @@ Python 依赖与 CPod 解耦，安装到本仓库自己的 `.venv`：首次使�
 命令行入口：
 
 ```powershell
-\.venv\Scripts\python.exe tools/fetch_from_mail.py --check      # 只查看候选邮件
-\.venv\Scripts\python.exe tools/fetch_from_mail.py --dry-run    # 预览要使用的本地包
-\.venv\Scripts\python.exe tools/fetch_from_mail.py              # 下载并导入
-\.venv\Scripts\python.exe tools/import_zip.py <zip 路径>        # 手动导入已有包
-\.venv\Scripts\python.exe tools/metrics.py --check              # 只重算，不写文件
+.\.venv\Scripts\python.exe tools/fetch_from_mail.py --check      # 只查看候选邮件
+.\.venv\Scripts\python.exe tools/fetch_from_mail.py --dry-run    # 预览要使用的本地包
+.\.venv\Scripts\python.exe tools/fetch_from_mail.py              # 下载并导入
+.\.venv\Scripts\python.exe tools/import_zip.py '<zip 路径>'      # 手动导入已有包
+.\.venv\Scripts\python.exe tools/metrics.py --check              # 只重算，不写文件
 node tools/check.js                          # 页面逻辑与数据关联自检
-\.venv\Scripts\python.exe tools/metrics.py --selftest
-\.venv\Scripts\python.exe tools/serve.py --selftest
-\.venv\Scripts\python.exe tools/tasks.py --selftest             # 长任务执行器的超时与卡死判据
+.\.venv\Scripts\python.exe tools/metrics.py --selftest
+.\.venv\Scripts\python.exe tools/serve.py --selftest
+.\.venv\Scripts\python.exe tools/tasks.py --selftest             # 长任务执行器的超时与卡死判据
 ```
 
-页面、数据和本地服务是一条路径：`index.html` 加载 `data.js`、`app.js` 和 `toolrail.js`；本地服务 `tools/serve.py` 只提供静态文件和刷新、登录、清理、停止接口。服务仅监听 `127.0.0.1`，对 API 使用启动时随机 token，并用静态文件白名单阻止网页访问 `local/`、导入脚本和仓库元数据。
+`index.html` 加载 `data.js`、`app.js`、`radar.js` 和 `toolrail.js`。本地服务 `tools/serve.py` 提供静态文件、刷新、登录、清理、停止和六维对比接口；对比计算集中在 `tools/metrics.py`。服务仅监听 `127.0.0.1`，对 API 使用启动时随机 token，并用静态文件白名单阻止网页访问 `local/`、导入脚本和仓库元数据。
+
+CPod 打开看板时，适配器会核对正在运行的服务与当前后端文件版本。旧服务会在无刷新或登录任务时正常关闭并重新启动，避免新页面被旧静态白名单或旧接口阻断；同版本继续复用。版本指纹只包含程序文件，不包含个人数据。图表脚本加载失败会显示错误原因，不再停留在加载提示。
 
 自动检查验证数据口径、页面入口与点击关联。宽窄屏布局、静态直开和工具栏悬浮行为仍需在真实页面目视核验。
 
@@ -75,10 +87,10 @@ node tools/check.js                          # 页面逻辑与数据关联自检
 | 文件 | 作用 |
 | --- | --- |
 | `index.html`、`styles.css`、`app.js` | 跑后、体能变化、周复盘、历史页面 |
+| `radar.js` | 六维对比的交互和展示 |
 | `toolrail.js`、`tools/serve.py`、`tools/tasks.py` | 刷新、登录、清理、停止与本地服务 |
+| `.apex/`、`tools/bridge_version.py` | ControlPod 入口与本地服务版本核对 |
 | `tools/fetch_from_mail.py`、`tools/import_zip.py`、`tools/auto_download.py` | 获取并解析官方导出包 |
 | `tools/xiaomi_login.py`、`tools/import_gui.py`、`tools/cleanup.py` | 登录、导入窗口、清理 |
 | `tools/metrics.py`、`data.js` | 预计算指标与本地生成数据 |
 | `tools/check.js` | 页面逻辑自检 |
-
-详细设计背景见 [PRODUCT_PLAN_V2.md](PRODUCT_PLAN_V2.md)；运行与维护以当前代码和本文为准。

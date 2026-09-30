@@ -1025,6 +1025,216 @@ def build_fitness_view(runs, load_series):
 
 
 # ---------------------------------------------------------------- 汇总
+RADAR_AXES = [
+    ("pace", "同强度配速", "秒/km", -1, 8.0),
+    ("retention", "后程效率保持", "%", 1, 3.0),
+    ("variation", "配速稳定性", "%", -1, 1.5),
+    ("hr", "平均心率", "bpm", 1, 5.0),
+    ("duration", "跑步时长", "分", 1, 5.0),
+    ("high", "较高强度占比", "%", 1, 5.0),
+]
+RADAR_WEIGHTS = (.60, .25, .15)
+
+
+def radar_review(axes, score, reason):
+    """Evidence-led commentary for a selected comparison, including conflicting signals."""
+    if score is None:
+        return {"headline": "先看原始差异，暂不作综合评价", "comment": reason,
+                "focus": "可调整对照范围或场次；评分条件未满足时，不用总分判断进退。"}
+    words = []
+    pace_delta, retention_delta, variation_delta = [a["delta"] for a in axes[:3]]
+    if pace_delta is not None:
+        words.append("平均配速基本相同" if abs(pace_delta) < .5 else
+                     "平均配速%s %g 秒/km" % ("快" if pace_delta < 0 else "慢", round(abs(pace_delta))))
+    if retention_delta is not None:
+        words.append("后程效率保持基本相同" if abs(retention_delta) < .05 else
+                     "后程效率保持%s %.1f 个百分点" % ("高" if retention_delta > 0 else "低", abs(retention_delta)))
+    if variation_delta is not None:
+        words.append("配速波动基本相同" if abs(variation_delta) < .05 else
+                     "配速波动%s %.1f 个百分点" % ("增加" if variation_delta > 0 else "减少", abs(variation_delta)))
+    labels = ["同强度配速", "后程保持", "节奏稳定"]
+    positives = [labels[i] for i, a in enumerate(axes[:3]) if a["plot"] >= 70]
+    negatives = [labels[i] for i, a in enumerate(axes[:3]) if a["plot"] <= 30]
+    if positives and negatives:
+        headline = "、".join(positives) + "较好，" + "、".join(negatives) + "需留意"
+    elif positives:
+        headline = "、".join(positives) + "优于对照，其余接近平常"
+    elif negatives:
+        headline = "、".join(negatives) + "低于对照，其余接近平常"
+    else:
+        headline = "三项表现均在个人波动参考内"
+    if len(positives) == 3:
+        headline = "三项表现均优于本次对照"
+    if len(negatives) == 3:
+        headline = "三项表现均低于本次对照"
+    if negatives:
+        worst = min(range(3), key=lambda i: (axes[i]["plot"] - 50) * RADAR_WEIGHTS[i])
+        focuses = ["下次复盘重点：在相近距离与强度下，观察配速是否持续回落。",
+                   "下次复盘重点：观察后程保持是否改善，并结合路线与体感理解变化。",
+                   "下次复盘重点：观察配速波动能否减少，先追踪节奏稳定性。"]
+        focus = focuses[worst]
+        if positives:
+            focus = "各项没有同步变化，总分不能代替分项判断。" + focus
+    else:
+        focus = "继续用相似跑核对这些变化是否持续，单场表现尚不能确认长期能力变化。"
+    return {"headline": headline, "comment": "对照 %d 场记录：" % axes[0]["n"] + "；".join(words) + "。",
+            "focus": focus}
+
+
+def radar_features(runs):
+    """Single-run facts, without treating missing samples as a zero score.
+
+    Use the middle 80% of the recorded duration to limit warm-up/cool-down.
+    Retention compares matched pace/HR minute points in the two middle halves.
+    This is a practical steady-run proxy, not a physiological test.
+    """
+    out = {}
+    for run in runs:
+        duration = run.get("duration") or 0
+        minutes = duration / 60
+        paces = {m: p for m, p in minute_window_points(run.get("paceSeries") or [], "min")
+                 if math.isfinite(m) and math.isfinite(p) and p > 0 and minutes * .1 <= m <= minutes * .9}
+        hrs = {m: h for m, h in minute_window_points(run.get("hrSeries") or [], "max")
+               if math.isfinite(m) and math.isfinite(h) and h > 0}
+        variation = round(cv(list(paces.values())) * 100, 3) if len(paces) >= 12 else None
+        front = [(1000 / paces[m]) * 60 / hrs[m] for m in paces if m in hrs and m < minutes * .5]
+        back = [(1000 / paces[m]) * 60 / hrs[m] for m in paces if m in hrs and m >= minutes * .5]
+        retention = (round((percentile(back, .5) / percentile(front, .5) - 1) * 100, 3)
+                     if len(front) >= 6 and len(back) >= 6 else None)
+        easy = _easy_share([run])
+        out[str(run["id"])] = {
+            "values": [run.get("pace"), retention, variation, run.get("hr"),
+                       round(minutes, 3) if duration else None, 100 - easy if easy is not None else None],
+            "steady": variation is not None and variation < STABLE_CV * 100,
+            "points": len(paces),
+        }
+    return out
+
+
+def _radar_prior(run, target):
+    if run["date"] != target["date"]:
+        return run["date"] < target["date"]
+    # Unknown times on the same day cannot establish which run happened first.
+    return bool(run.get("time") and target.get("time") and run["time"] < target["time"])
+
+
+def _radar_matches(run, target, distance_pct=.2, hr_tolerance=5, same_intensity=True):
+    if not all(run.get(k) and target.get(k) for k in ("distance", "pace", "hr", "duration")):
+        return False
+    return (abs(run["distance"] - target["distance"]) <= target["distance"] * distance_pct
+            and abs(run["duration"] - target["duration"]) <= target["duration"] * .25
+            and abs(run["hr"] - target["hr"]) <= hr_tolerance
+            and intensity_band(run) is not None and intensity_band(target) is not None
+            and (not same_intensity or intensity_band(run) == intensity_band(target)))
+
+
+def radar_compare(runs, settings=None, features=None):
+    """One source of truth for precomputed static presets and custom API comparisons.
+
+    Axes 0..2 are directed performance proxies, 3..5 contextual quantities.
+    The selected baseline is 50; one historical IQR shifts an axis by 20 points.
+    IQRs use strictly prior similar runs within 180 days, with conservative floors.
+    All three components and >=3 comparable steady references are required.
+    """
+    settings = {} if settings is None else settings
+    if not isinstance(settings, dict):
+        raise ValueError("对比设置格式不正确")
+    by_id = {str(r["id"]): r for r in runs}
+    target_id = str(settings.get("target") or (runs[-1]["id"] if runs else ""))
+    if target_id not in by_id:
+        raise ValueError("请选择存在的本场记录")
+    target = by_id[target_id]
+    mode = settings.get("mode", "auto")
+    if mode not in ("auto", "single", "manual"):
+        raise ValueError("对照方式不正确")
+    try:
+        days = int(settings.get("days", 56))
+        distance_pct = float(settings.get("distancePct", 20)) / 100
+        hr_tolerance = float(settings.get("hrTolerance", 5))
+    except (ValueError, TypeError, OverflowError):
+        raise ValueError("范围或筛选条件不正确") from None
+    if days not in (28, 56, 90, 180) or not .05 <= distance_pct <= .5 or not 1 <= hr_tolerance <= 15:
+        raise ValueError("范围或筛选条件超出允许值")
+    same_intensity = settings.get("sameIntensity", True)
+    if not isinstance(same_intensity, bool):
+        raise ValueError("强度条件格式不正确")
+    end_date = date.fromisoformat(target["date"])
+    try:
+        start = date.fromisoformat(settings.get("start") or (end_date - timedelta(days=days)).isoformat())
+        end = date.fromisoformat(settings.get("end") or target["date"])
+    except (ValueError, TypeError):
+        raise ValueError("自定义日期不正确") from None
+    if start > end or end > end_date or (end_date - start).days > 3660:
+        raise ValueError("日期需按先后排列，且不能晚于本场")
+    prior = [r for r in runs if _radar_prior(r, target)]
+    candidates = [r for r in prior if start.isoformat() <= r["date"] <= end.isoformat()]
+    if mode == "auto":
+        refs = [r for r in candidates if _radar_matches(r, target, distance_pct, hr_tolerance, same_intensity)]
+    else:
+        ids = settings.get("ids", [])
+        if not isinstance(ids, list) or len(ids) > len(runs):
+            raise ValueError("勾选场次格式不正确")
+        ids = list(dict.fromkeys(str(i) for i in ids))
+        available = {str(r["id"]): r for r in candidates}
+        if any(i not in available for i in ids):
+            raise ValueError("对照场次需位于所选范围内，且发生在本场之前")
+        if mode == "single" and len(ids) > 1:
+            raise ValueError("单场对照只能选择一场")
+        refs = [available[i] for i in ids]
+    features = features if features is not None else radar_features(runs)
+    target_feature = features[target_id]
+    historical = [r for r in prior if r["date"] >= (end_date - timedelta(days=180)).isoformat()
+                  and _radar_matches(r, target) and features[str(r["id"])]["steady"]]
+    strict = all(_radar_matches(r, target) for r in refs)
+    axes = []
+    for index, (key, label, unit, direction, floor) in enumerate(RADAR_AXES):
+        vals = [features[str(r["id"])]["values"][index] for r in refs]
+        base = percentile(vals, .5)
+        value = target_feature["values"][index]
+        distribution = [features[str(r["id"])]["values"][index] for r in historical]
+        spread = max(floor, (percentile(distribution, .75) - percentile(distribution, .25))
+                     if any(v is not None for v in distribution) else floor)
+        delta = value - base if value is not None and base is not None else None
+        plot = round(max(0, min(100, 50 + 20 * direction * delta / spread)), 1) if delta is not None else None
+        axes.append({"key": key, "label": label, "unit": unit, "value": value,
+                     "baseline": round(base, 3) if base is not None else None,
+                     "delta": round(delta, 3) if delta is not None else None,
+                     "n": sum(v is not None for v in vals), "scale": round(spread, 3),
+                     "plot": plot, "baselinePlot": 50 if base is not None else None,
+                     "scored": index < 3})
+    score = None
+    reason = ""
+    if len(refs) < MIN_GROUP:
+        reason = "至少需要 3 场相似跑才能给出总分；单场对照仍可查看六项差值。"
+    elif not strict:
+        reason = "对照条件不同：总分暂停，保留原始差值。"
+    elif not target_feature["steady"] or any(not features[str(r["id"])]["steady"] for r in refs):
+        reason = "本场或对照记录不满足稳态条件，暂不评分。"
+    elif any(a["n"] < MIN_GROUP or a["plot"] is None for a in axes[:3]):
+        reason = "核心指标的逐分钟样本不足，暂不评分。"
+    elif len(historical) < MIN_GROUP:
+        reason = "此前 180 天的稳态相似跑不足 3 场，缺少个人波动参考。"
+    else:
+        score = round(sum(a["plot"] * w for a, w in zip(axes[:3], RADAR_WEIGHTS)))
+    shift = score - 50 if score is not None else None
+    status = ("接近参考" if abs(shift) <= 10 else "高于参考" if shift > 0 else "低于参考") if shift is not None else "暂不评分"
+    return {"target": target_id, "mode": mode, "from": start.isoformat(), "through": end.isoformat(),
+            "ids": [str(r["id"]) for r in refs], "candidateIds": [str(r["id"]) for r in candidates],
+            "axes": axes, "score": score, "baselineScore": 50 if score is not None else None,
+            "shift": shift, "status": status, "reason": reason, "strict": strict,
+            "historyN": len(historical), "steady": target_feature["steady"],
+            "review": radar_review(axes, score, reason)}
+
+
+def build_radar(runs):
+    features = radar_features(runs)
+    presets = {}
+    for run in runs:
+        presets[str(run["id"])] = {str(days): radar_compare(runs, {"target": str(run["id"]), "days": days}, features)
+                                   for days in (28, 56, 90, 180)}
+    return {"version": 1, "presets": presets}
+
+
 def build(runs, today=None):
     runs = sorted(runs, key=lambda r: r["date"])
     if not runs:
@@ -1197,6 +1407,7 @@ def build(runs, today=None):
         "gait": {k: {"now": gait_recent[k], "base": bands[k]["p50"] if bands[k] else None}
                  for k in ("cadence", "td", "va", "vsr")},
         "runSegments": run_segments,
+        "radar": build_radar(runs),
         "groups": group_runs(runs),
         "tod": tod,
         "calendar": cal,
@@ -1477,6 +1688,66 @@ def selftest():
     ck("周期 上期按相同6天截取", current_week["compare"]["previous"]["through"], "2026-09-12")
     ck("周期 同天数对比跑量差", current_week["compare"]["previous"]["kmDelta"], -6.0)
     ck("周期 同天数对比样本数", current_week["compare"]["previous"]["n"], 6)
+
+    # Radar: previous-only references, missing data, scoring direction, custom ranges.
+    def radar_fixture(ident, day, pace_value=400, distance=6):
+        return {"id": ident, "date": day, "time": "18:00", "distance": distance,
+                "duration": 2400, "pace": pace_value, "hr": 150,
+                "zones": {"aer": 2400},
+                "paceSeries": [[m, pace_value] for m in range(1, 41)],
+                "hrSeries": [[m, 150] for m in range(1, 41)]}
+    radar_runs = [radar_fixture(str(i), "2026-09-%02d" % (i + 1)) for i in range(4)]
+    radar_runs += [radar_fixture("target", "2026-09-20"), radar_fixture("future", "2026-09-21")]
+    equal = radar_compare(radar_runs, {"target": "target"})
+    ck("雷达 相同表现总分为50", equal["score"], 50)
+    ck("雷达 不包含本场或未来", equal["ids"], ["0", "1", "2", "3"])
+    radar_runs[4]["pace"] = 384
+    radar_runs[4]["paceSeries"] = [[m, 384] for m in range(1, 41)]
+    faster = radar_compare(radar_runs, {"target": "target"})
+    ck("雷达 同心率更快方向正确", faster["score"], 74)
+    ck("雷达 非评分条件不影响总分", faster["axes"][3]["scored"], False)
+    ck("雷达 点评指出主要变化", "同强度配速" in faster["review"]["headline"], True)
+    ck("雷达 点评有原始配速依据", "快 16 秒/km" in faster["review"]["comment"], True)
+    conflict_axes = [{"plot": 80, "delta": -16, "n": 4}, {"plot": 80, "delta": 4, "n": 4},
+                     {"plot": 0, "delta": 5, "n": 4}]
+    conflict = radar_review(conflict_axes, 66, "")
+    ck("雷达 综合分高不掩盖节奏问题", "节奏稳定需留意" in conflict["headline"], True)
+    ck("雷达 矛盾信号有追踪重点", "没有同步变化" in conflict["focus"], True)
+    single = radar_compare(radar_runs, {"target": "target", "mode": "single", "ids": ["0"]})
+    ck("雷达 单场不冒充群体评分", single["score"], None)
+    ck("雷达 单场点评不评价优劣", single["review"]["headline"], "先看原始差异，暂不作综合评价")
+    ck("雷达 单场仍有原始差值", single["axes"][0]["delta"], -16)
+    limited = radar_compare(radar_runs, {"target": "target", "start": "2026-09-03", "end": "2026-09-04"})
+    ck("雷达 自定义范围含边界", limited["ids"], ["2", "3"])
+    ck("雷达 少样本不评分", limited["score"], None)
+    sparse = [dict(r) for r in radar_runs]
+    sparse[4]["hrSeries"] = []
+    missing = radar_compare(sparse, {"target": "target"})
+    ck("雷达 缺心率序列不补零", missing["axes"][1]["value"], None)
+    ck("雷达 缺核心指标不评分", missing["score"], None)
+    irregular = [dict(r) for r in radar_runs]
+    irregular[4]["paceSeries"] = [[m, 300 if m % 2 else 600] for m in range(1, 41)]
+    ck("雷达 非稳态跑不评分", radar_compare(irregular, {"target": "target"})["score"], None)
+    different = [dict(r) for r in radar_runs]
+    different[0]["distance"] = 12
+    mixed = radar_compare(different, {"target": "target", "mode": "manual", "ids": ["0", "1", "2"]})
+    ck("雷达 手动混入不同距离不评分", mixed["score"], None)
+    ck("雷达 手动混入不同条件有标记", mixed["strict"], False)
+    for invalid in ({"target": "target", "mode": "manual", "ids": ["future"]},
+                    {"target": "target", "end": "2026-09-21"},
+                    {"target": "target", "distancePct": float("nan")},
+                    {"target": "target", "start": "bad"}):
+        try:
+            radar_compare(radar_runs, invalid)
+            errs.append("雷达 无效或未来对照未被拒绝")
+        except ValueError:
+            pass
+    ck("雷达 静态与在线同一口径", build_radar(radar_runs)["presets"]["target"]["56"], faster)
+    same_day = radar_fixture("same", "2026-09-20")
+    same_day["time"] = "08:00"
+    ck("雷达 同日仅较早时间可用", _radar_prior(same_day, radar_runs[4]), True)
+    same_day.pop("time")
+    ck("雷达 同日未知时间不推测", _radar_prior(same_day, radar_runs[4]), False)
 
     if errs:
         print("自测失败 %d 项：" % len(errs))

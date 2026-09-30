@@ -101,6 +101,72 @@
       <div id="fitnessChart" role="img" aria-label="最近 120 天训练基础和近期负荷变化"></div>
     </div>
     <p class="fitness-method">两条线由设备训练负荷按天平滑计算，休息日按零计入；42/7 天窗口尚未按个人跑测标定。它们是训练量的参考，不是实测体能、疲劳或伤病风险。每场的进退另用距离、强度、心率相近的跑步核对。</p>
+    <section class="radar-panel" aria-labelledby="radarTitle">
+      <header class="radar-heading"><div><p class="eyebrow">选一场 · 对照此前记录</p><h3 id="radarTitle">单场六维对比</h3></div><span class="chip" id="radarStatus">正在加载对比</span></header>
+      <div class="radar-controls">
+        <label class="radar-target">本场<div class="radar-step"><button type="button" id="radarPrev" aria-label="选择上一场">‹</button><select id="radarTarget" aria-label="选择本场跑步"></select><button type="button" id="radarNext" aria-label="选择下一场">›</button></div></label>
+        <label>对照方式<select id="radarMode"><option value="auto">自动 · 相似跑中位数</option><option value="single">指定之前一场</option><option value="manual">勾选多场 · 中位数</option></select></label>
+        <label>此前范围<select id="radarDays"><option value="28">28 天</option><option value="56" selected>56 天</option><option value="90">90 天</option><option value="180">180 天</option><option value="custom">自定义日期</option></select></label>
+      </div>
+      <div class="radar-connection" id="radarConnection" hidden><p class="radar-note" id="radarConnectionText" role="status"></p><button type="button" id="radarReconnect">重新连接本地服务</button></div>
+      <p class="radar-note" id="radarSelection" role="status"></p>
+      <div class="radar-controls" id="radarDates" hidden><label>起始日期<input type="date" id="radarStart"></label><label>结束日期<input type="date" id="radarEnd"></label><button type="button" id="radarApplyDates">应用日期</button></div>
+      <label class="radar-single" id="radarSingleBox" hidden>对照场次<select id="radarSingle"></select></label>
+      <details class="radar-custom" id="radarCustom"><summary>自定义筛选与图线</summary>
+        <div class="radar-settings">
+          <label>距离容差<select id="radarDistance"><option value="10">±10%</option><option value="20" selected>±20%</option><option value="30">±30%</option></select></label>
+          <label>平均心率容差<select id="radarHr"><option value="3">±3 bpm</option><option value="5" selected>±5 bpm</option><option value="8">±8 bpm</option><option value="10">±10 bpm</option></select></label>
+          <label class="radar-check"><input type="checkbox" id="radarIntensity" checked> 相同强度类别</label>
+          <label>本场颜色<input type="color" id="radarColor" value="#245d7c"></label>
+          <label>本场图线<select id="radarLine"><option value="solid">实线</option><option value="dash">虚线</option></select></label>
+          <label>对照颜色<input type="color" id="radarBaseColor" value="#888780"></label>
+          <label>对照图线<select id="radarBaseLine"><option value="dash">虚线</option><option value="solid">实线</option></select></label>
+          <label class="radar-check"><input type="checkbox" id="radarShowTarget" checked> 显示本场图线</label>
+          <label class="radar-check"><input type="checkbox" id="radarShowBase" checked> 显示对照图线</label>
+        </div>
+        <p class="radar-note">自动筛选同时要求时长相差不超过 25%。放宽筛选或手动勾选后，符合默认条件才给总分。</p>
+        <div class="radar-actions"><button type="button" id="radarSave">保存我的设置</button><button type="button" id="radarReset">恢复默认</button><span id="radarSaved" role="status"></span></div>
+      </details>
+      <details class="radar-custom" id="radarPickBox" hidden><summary id="radarPickSummary">勾选对照场次</summary><div class="radar-picks" id="radarPicks"></div><button type="button" id="radarApplyPicks">应用勾选</button></details>
+      <p class="radar-note" id="radarMessage" role="status" hidden></p>
+      <div class="radar-result" id="radarResult" hidden>
+        <div><div id="radarChart" role="img" aria-label="本场与此前记录的六维对比图"></div><div class="radar-legend" id="radarLegend"></div></div>
+        <div class="radar-facts">
+          <section class="radar-review" aria-label="本场综合点评" aria-live="polite">
+            <div><p class="eyebrow">本场表现 · 对照参考 50</p><p class="radar-score" id="radarScore"></p></div>
+            <div><h4 id="radarCommentTitle"></h4><p id="radarComment"></p><p class="radar-note" id="radarReason"></p></div>
+          </section>
+          <div class="radar-table-wrap"><table class="radar-table"><thead><tr><th>指标</th><th>本场</th><th>对照</th><th>差值</th></tr></thead><tbody id="radarValues"></tbody></table></div>
+        </div>
+      </div>
+      <details class="radar-custom"><summary>比较范围与依据</summary><p class="radar-note" id="radarBasis" aria-live="polite"></p><div id="radarEvidence"></div></details>
+      <details class="radar-custom radar-help" id="radarHelp">
+        <summary>总分与图形怎样计算</summary>
+        <h4>六个指标分别是什么意思</h4>
+        <p class="radar-note">前三项看本场表现，计入总分；后三项说明这场怎么跑，不计分。右侧“本场”和“对照”是实际数值，蓝色小字是单项得分。</p>
+        <dl class="radar-definitions">
+          <div><dt>同强度配速 <small>计入总分 · 占 60%</small></dt><dd>看相近条件下，跑一公里需要多久。比如 6′42″/km，就是一公里用 6 分 42 秒；数字越小，跑得越快。默认会找距离、时长、平均心率和设备强度类别相近的记录作对照。单独指定一场时，先结合这些条件看配速差异。</dd></div>
+          <div><dt>后程效率保持 <small>计入总分 · 占 25%</small></dt><dd>看后半程的跑速与心率配合，相比前半程有没有变差。计算时用“跑速 ÷ 心率”比较两段：正数表示后段这个比值更高，负数表示更低，接近 0 表示前后接近。例如 +3% 表示后段比前段高约 3%。上坡、提速或心率变化都可能影响它，要结合这场的实际跑法看。</dd></div>
+          <div><dt>配速稳定性 <small>计入总分 · 占 15%</small></dt><dd>看每分钟配速的快慢变化有多大。这里显示的是“配速波动百分比”，数字越小，节奏越均匀；例如 5% 比 10% 更稳定。间歇跑、上下坡和停顿也会使波动变大，这项主要适合用来比较连续、节奏较均匀的跑步。</dd></div>
+          <div><dt>平均心率 <small>条件对照 · 不计分</small></dt><dd>看整场记录的平均心跳频率。156 bpm 就是每分钟平均跳 156 次。它帮助判断两场是否用了相近强度；心率更低或更高，都需要结合配速和跑法理解。</dd></div>
+          <div><dt>跑步时长 <small>条件对照 · 不计分</small></dt><dd>看这场记录了多少分钟。例如 69 分就是跑步记录的总时长为 69 分钟。跑得更久会影响后程表现，所以比较时要看时长是否接近；时长增加不直接代表能力提高。</dd></div>
+          <div><dt>较高强度占比 <small>条件对照 · 不计分</small></dt><dd>看设备记录的心率区间时间里，有多少比例处在“无氧”和“极限”区间。例如 60% 表示已记录的区间时间中，约六成在这两个区间。占比越高，说明这场较高强度时间的比例越大，需要结合本次训练目的看。</dd></div>
+        </dl>
+        <h4>总分和图形怎么读</h4>
+        <ul class="radar-help-list">
+          <li><strong>对照 50 分：</strong>把你选择的对照表现放在 50 分。多场取中位数，也就是排序后居中的数，减少特别高或特别低的某一场对结果的影响。</li>
+          <li><strong>总分：</strong>同强度配速得分 × 60% ＋ 后程效率保持得分 × 25% ＋ 配速稳定性得分 × 15%，最后取整。比如 66 分、比对照 +16 分，表示按这套规则高于本次对照 16 分；它不代表能力提高了 16%。</li>
+          <li><strong>“接近参考”：</strong>总分在 40～60 分之间。高于 60 分显示“高于参考”，低于 40 分显示“低于参考”；仍要结合三个分项看，可能一项改善、另一项回落。</li>
+          <li><strong>图线向外：</strong>前三项表示对应得分较高；后三项只表示心率、时长或较高强度占比更大。这三个条件指标不能按“越外越好”理解。</li>
+          <li><strong>暂不评分：</strong>至少要有 3 场符合默认条件、节奏较稳定的对照，且本场和对照的核心数据足够；此前 180 天也要有至少 3 场稳态相似跑作波动参考。单场对照仍能看原始数值和差值。</li>
+        </ul>
+        <h4>百分比、差值和计算细节</h4>
+        <p class="radar-note">“后程保持 +3%”是本场后段相对前段的变化；右侧“差值”才是本场与对照的差异。比如本场 +3%、对照 −3%，差值就是 +6 个百分点。配速稳定性的差值为正，表示波动增加；“配速快 9 秒/km”表示每公里用时少了 9 秒。</p>
+        <p class="radar-note">每项图形位置以对照为 50，按你此前 180 天稳态相似跑的常见波动换算：一个波动单位相差 20 点，显示范围限制为 0～100。因此 0 分或 100 分是这套换算的显示边界。总分是本场相对所选对照的表现参考，尚未用个人跑测标定。</p>
+        <p class="radar-note">具体波动单位取历史第 75 百分位与第 25 百分位之差（四分位距）；配速至少按 8 秒/km、后程保持至少按 3 个百分点、配速波动至少按 1.5 个百分点作为一个单位，避免小变化被放大。配速稳定性使用每分钟配速的标准差除以平均值，再乘 100%。</p>
+        <p class="radar-note">稳定性和后程保持只分析整场中间 80% 的时段，去掉最前和最后各 10%；后程保持使用同时有配速与心率的分钟，前后两半各取中位数比较。缺失数据不补成零。默认对照还要求距离相差不超过 20%、时长相差不超过 25%、平均心率相差不超过 5 bpm，设备强度类别相同。天气与路线尚未纳入，单场结果需要结合这些因素理解。</p>
+      </details>
+    </section>
     <div class="fitness-run-layout">
       <div><h3>每场表现</h3><p class="history-count">点选一场，查看比较依据</p><div class="fitness-run-list" id="fitnessRunList"></div></div>
       <article class="fitness-run-detail" aria-live="polite"><div id="fitnessRunDetail"></div><div id="fitnessEvidence"></div></article>
@@ -227,6 +293,19 @@
 
 <script src="data.js"></script>
 <script src="app.js"></script>
+<script>
+// Resource/runtime failure must leave a useful message instead of an endless loading label.
+window.addEventListener('error', function (event) {
+  var source = event.filename || (event.target && event.target.src) || '';
+  if (!/\/radar\.js(?:[?#]|$)/.test(source)) return;
+  document.getElementById('radarStatus').textContent = '图表未加载';
+  var message = document.getElementById('radarMessage');
+  message.textContent = '图表模块未能加载。请在 CPod 重新打开跑步看板，系统会检查并更新本地服务。';
+  message.hidden = false;
+  document.getElementById('radarResult').hidden = true;
+}, true);
+</script>
+<script src="radar.js"></script>
 <script src="toolrail.js"></script>
 </body>
 </html>

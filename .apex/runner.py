@@ -28,14 +28,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+from bridge_version import REVISION_HEADER, source_revision
 
 
 SERVE_SCRIPT = Path("tools") / "serve.py"         # 本地桥 + 看板
@@ -155,6 +160,44 @@ def port_serving(port: int, timeout: float = 1.5) -> bool:
         return False
 
 
+def bridge_matches(port: int, root: Path) -> bool:
+    """An answering port is reusable only if it loaded this backend revision."""
+    try:
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/", method="HEAD")
+        with urllib.request.urlopen(request, timeout=2) as response:
+            return response.headers.get(REVISION_HEADER) == source_revision(root)
+    except (OSError, urllib.error.URLError):
+        return False
+
+
+def retire_outdated_bridge(root: Path, port: int, log_path: Path) -> None:
+    """Gracefully retire our stale bridge; never kill an arbitrary port/PID or active import."""
+    base = f"http://127.0.0.1:{port}"
+    with urllib.request.urlopen(base + "/", timeout=3) as response:
+        html = response.read().decode("utf-8")
+    match = re.search(r"<script>window\.__BRIDGE__\s*=\s*([\s\S]*?);</script>", html)
+    bootstrap = json.loads(match.group(1)) if match else {}
+    if (not bootstrap.get("project") or Path(bootstrap["project"]).resolve() != root.resolve()
+            or bootstrap.get("api") != "/api" or not isinstance(bootstrap.get("token"), str)):
+        raise RuntimeError("现有端口不是本项目的服务，无法自动更新。")
+    headers = {"X-Bridge-Token": bootstrap["token"]}
+    request = urllib.request.Request(base + "/api/status", headers=headers)
+    with urllib.request.urlopen(request, timeout=3) as response:
+        status = json.load(response)
+    if any((status.get("busy") or {}).values()) or status.get("idle") is False:
+        raise RuntimeError("本地服务需要更新，但刷新或登录仍在运行；完成后再次打开看板。")
+    write_log(log_path, "[STEP] 本地服务版本已过期，正常关闭后重新启动")
+    request = urllib.request.Request(base + "/api/quit", data=b"{}", headers={**headers, "Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=3) as response:
+        if not json.load(response).get("ok"):
+            raise RuntimeError("旧服务未能正常关闭，请在 CPod 重启跑步看板。")
+    deadline = time.monotonic() + 5
+    while port_serving(port, timeout=.3):
+        if time.monotonic() >= deadline:
+            raise RuntimeError("旧服务仍在退出，请稍后再次打开看板。")
+        time.sleep(.1)
+
+
 def kill_bridge(log_path: Path) -> str:
     """结束之前起的本地桥；没有就当作无事发生。"""
     pid = read_pid(SERVE_PID_FILE)
@@ -268,7 +311,7 @@ def spawn_bridge(
     # ★ 端口不能认死传入的那个：`打开看板.cmd` 内部会自己扫 8917-8960，
     #   8917 被占它就往后挪。认死端口会「桥明明起来了、我们还在 8917 上空等」，
     #   最后误判成「起不来」。所以在整个扫描区间里找**谁在应答**。
-    actual = wait_for_any_bridge(port)
+    actual = wait_for_any_bridge(port, root=root)
     if actual is None:
         SERVE_PORT_FILE.unlink(missing_ok=True)
         write_log(log_path, f"[ERROR] {WAIT_TIMEOUT:.0f} 秒内没等到桥在 "
@@ -285,7 +328,7 @@ def spawn_bridge(
     return pid
 
 
-def wait_for_any_bridge(port: int, timeout: float = WAIT_TIMEOUT) -> int | None:
+def wait_for_any_bridge(port: int, timeout: float = WAIT_TIMEOUT, root: Path | None = None) -> int | None:
     """在 `port` 起的扫描区间里等第一个应答的桥，返回它的真实端口。
 
     故意扫一整段而不是只试一个：桥的端口由 `打开看板.cmd` 自己挑，
@@ -294,7 +337,7 @@ def wait_for_any_bridge(port: int, timeout: float = WAIT_TIMEOUT) -> int | None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         for candidate in range(port, port + PORT_SCAN_RANGE):
-            if port_serving(candidate, timeout=0.5):
+            if port_serving(candidate, timeout=0.5) and (root is None or bridge_matches(candidate, root)):
                 return candidate
         time.sleep(0.25)
     return None
@@ -407,6 +450,9 @@ def launch_bridge(
         raise RuntimeError(f"看板文件不存在：{index}")
 
     existing = bridge_running()
+    if existing is not None and not bridge_matches(existing, root):
+        retire_outdated_bridge(root, existing, log_path)
+        existing = None
     if existing is not None:
         write_log(log_path, f"[SKIP] 本地桥已在跑（端口 {existing}），直接开看板")
         url = open_dashboard(existing, root, log_path, console_root)

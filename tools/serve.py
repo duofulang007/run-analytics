@@ -46,8 +46,12 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tasks  # noqa: E402
+import metrics  # noqa: E402
+from bridge_version import REVISION_HEADER, source_revision  # noqa: E402
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
+# Captured at startup: do not claim that old imports match edited source files.
+_REVISION = source_revision(PROJECT_DIR)
 
 # ---------------------------------------------------------------- 存活标记
 # 「桥还活着吗」这件事必须由**桥自己**回答，而不是由起它的那次调用回答。
@@ -113,7 +117,7 @@ STATIC_TYPES = {
 # 不是整个项目 —— `local/` 里是浏览器 profile、邮箱凭证、导入日志，`tools/` 里是脚本，
 # 都不能被网页取到。子目录一个都不开放。
 ROOT_FILES = {
-    "index.html", "styles.css", "app.js", "toolrail.js",
+    "index.html", "styles.css", "app.js", "toolrail.js", "radar.js",
     "data.js", "data.prev.js",
     "favicon.ico",
 }
@@ -151,6 +155,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header(REVISION_HEADER, _REVISION)
         # 本机服务，只服务自己 —— 明确禁掉被别的源嵌进 iframe
         self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -301,6 +306,16 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- API: POST
     def _api_post(self, route: str, query: dict, body: dict):
+        if route == "/api/radar/compare":
+            try:
+                _, data, _ = metrics.load()
+                result = metrics.radar_compare(data.get("runs") or [], body)
+            except (ValueError, TypeError, KeyError):
+                return self._error(400, "对比设置无效：日期不能晚于本场，场次需位于范围内。")
+            except OSError:
+                return self._error(503, "暂时读不到跑步数据，请稍后重试。")
+            return self._json({"ok": True, "comparison": result})
+
         if route == "/api/refresh":
             try:
                 before = tasks.data_mtime()

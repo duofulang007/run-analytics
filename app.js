@@ -275,6 +275,7 @@
       button.addEventListener('click', function () {
         fitnessRunId = button.getAttribute('data-fitness-run');
         renderFitness();
+        if (document.dispatchEvent) document.dispatchEvent(new CustomEvent('fitness-run-selected', { detail: fitnessRunId }));
       });
     });
     renderFitnessDetail();
@@ -471,5 +472,6 @@
     renderMode();
     renderWeekly();
   });
+  document.addEventListener('radar-open-run', function (event) { openHistoryRun(event.detail); });
   render();
 })();

@@ -144,6 +144,35 @@ function main() {
   const M = D.metrics || {};
   const B = M.board || {};
   const runs = D.runs || [];
+  const radar = M.radar || {};
+  run("load radar.js", () => vm.runInContext(fs.readFileSync(path.join(ROOT, "radar.js"), "utf8"), ctx));
+  ok("六维图或静态预计算缺失", markup.includes('src="radar.js"') &&
+    radar.presets && html("radarChart").includes("<svg"));
+  ok("六维图脚本加载失败会永久等待", markup.includes("图表未加载") &&
+    markup.includes('id="radarResult" hidden'));
+  ok("六维图没有展示六项原始数值", (html("radarValues").match(/<tr>/g) || []).length === 6);
+  ok("六维图没有展示三个评分项", (html("radarValues").match(/data-radar-axis-score=/g) || []).length === 3);
+  ok("六维图条件指标被冒充评分", (html("radarValues").match(/不计分/g) || []).length === 3);
+  ok("静态直开没有禁用需要服务的设置", els.radarMode.disabled && els.radarDistance.disabled);
+  ok("六维图服务未连接时没有直接提示原因与恢复入口", text("radarConnectionText").includes("本地服务") &&
+    els.radarConnection && !els.radarConnection.hidden && markup.includes('id="radarReconnect"'));
+  const latestRadar = (radar.presets || {})[String(runs[runs.length - 1].id)];
+  if (latestRadar) {
+    const expected = latestRadar["56"];
+    ok("六维图没有消费预计算总分", expected.score == null ? text("radarComment").includes(expected.reason)
+      : html("radarScore").includes(String(expected.score)));
+    ok("六维图没有展示综合点评", expected.review && text("radarCommentTitle") === expected.review.headline &&
+      text("radarComment") === expected.review.comment);
+    els.radarPrev.handlers.click[0]();
+    ok("六维图上一场切换未生效", els.radarTarget.value === String(runs[runs.length - 2].id));
+    els.radarNext.handlers.click[0]();
+    ok("六维图下一场切换未生效", els.radarTarget.value === String(runs[runs.length - 1].id));
+    els.radarDays.value = "28";
+    els.radarDays.handlers.change[0]();
+    ok("六维图范围切换未生效", text("radarBasis").includes(latestRadar["28"].from));
+    els.radarReset.handlers.click[0]();
+    ok("六维图恢复默认未生效", els.radarDays.value === "56" && els.radarLine.value === "solid");
+  }
   const weeks = (((B.timeline || {}).week || {}).rows || []);
   const fitness = B.fitness || {};
   const click = (parent, selector, predicate) => {
