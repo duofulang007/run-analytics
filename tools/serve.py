@@ -442,7 +442,7 @@ def _selftest() -> int:
     ok("local/ 被挡", not allowed("local/mail_state.json"))
     ok("local/browser-profile 被挡", not allowed("local/browser-profile/Cookies"))
     ok("tools 脚本被挡", not allowed("tools/serve.py"))
-    ok("仓库文档被挡", not allowed("README.md") and not allowed("PRODUCT_PLAN_V2.md"))
+    ok("仓库文档被挡", not allowed("README.md") and not allowed("AGENTS.md"))
     ok("inbox/ 被挡", not allowed("inbox/x.zip"))
     ok("已删的旧资源不会被服务（计划/图表/旧外壳）",
        not any(allowed(f) for f in ("plan-ui.js", "charts.js",
